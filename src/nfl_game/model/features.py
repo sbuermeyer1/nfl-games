@@ -106,8 +106,15 @@ def build_game_features(
     g["total_points"] = g["total"]
 
     keep = [
-        "game_id", "season", "week", "home_team", "away_team",
-        "spread_line", "total_line", *FEATURE_COLS, *TARGET_COLS,
+        "game_id",
+        "season",
+        "week",
+        "home_team",
+        "away_team",
+        "spread_line",
+        "total_line",
+        *FEATURE_COLS,
+        *TARGET_COLS,
     ]
     out = g[keep].copy()
     out[FEATURE_COLS] = out[FEATURE_COLS].fillna(0.0)

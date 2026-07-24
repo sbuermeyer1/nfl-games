@@ -31,13 +31,23 @@ def _schedules():
 
 def _ratings():
     rows = []
-    for team, off, dfn in (("BUF", 0.2, 0.1), ("KC", 0.1, 0.15), ("NYJ", -0.1, 0.0), ("MIA", 0.0, -0.05)):
+    for team, off, dfn in (
+        ("BUF", 0.2, 0.1),
+        ("KC", 0.1, 0.15),
+        ("NYJ", -0.1, 0.0),
+        ("MIA", 0.0, -0.05),
+    ):
         rows.append(
             {
-                "season": 2024, "week": 2, "team": team,
-                "off_rating": off, "def_rating": dfn,
-                "off_rating_pass": off + 0.05, "def_rating_pass": dfn,
-                "off_rating_rush": off - 0.05, "def_rating_rush": dfn - 0.02,
+                "season": 2024,
+                "week": 2,
+                "team": team,
+                "off_rating": off,
+                "def_rating": dfn,
+                "off_rating_pass": off + 0.05,
+                "def_rating_pass": dfn,
+                "off_rating_rush": off - 0.05,
+                "def_rating_rush": dfn - 0.02,
             }
         )
     return pd.DataFrame(rows)
@@ -49,14 +59,25 @@ def _ngs():
         for team, cpoe in (("BUF", 4.0), ("KC", 2.0), ("NYJ", -1.0), ("MIA", 0.5)):
             rows.append(
                 {
-                    "season": 2024, "week": week, "team": team,
-                    "cpoe": cpoe, "time_to_throw": 2.7, "air_yards_to_sticks": 0.0,
-                    "aggressiveness": 15.0, "ryoe_per_att": 0.1,
-                    "pct_eight_defenders": 20.0, "separation": 2.8, "yac_oe": 0.0,
-                    "cpoe_imputed": 0, "time_to_throw_imputed": 0,
-                    "air_yards_to_sticks_imputed": 0, "aggressiveness_imputed": 0,
-                    "ryoe_per_att_imputed": 0, "pct_eight_defenders_imputed": 0,
-                    "separation_imputed": 0, "yac_oe_imputed": 0,
+                    "season": 2024,
+                    "week": week,
+                    "team": team,
+                    "cpoe": cpoe,
+                    "time_to_throw": 2.7,
+                    "air_yards_to_sticks": 0.0,
+                    "aggressiveness": 15.0,
+                    "ryoe_per_att": 0.1,
+                    "pct_eight_defenders": 20.0,
+                    "separation": 2.8,
+                    "yac_oe": 0.0,
+                    "cpoe_imputed": 0,
+                    "time_to_throw_imputed": 0,
+                    "air_yards_to_sticks_imputed": 0,
+                    "aggressiveness_imputed": 0,
+                    "ryoe_per_att_imputed": 0,
+                    "pct_eight_defenders_imputed": 0,
+                    "separation_imputed": 0,
+                    "yac_oe_imputed": 0,
                 }
             )
     return pd.DataFrame(rows)
@@ -116,7 +137,9 @@ def test_ngs_features_exclude_current_week():
     ngs.loc[ngs["week"] == 2, "cpoe"] = 99.0
     baseline = build_game_features(_schedules(), _ratings(), _ngs()).set_index("game_id")
     poisoned = build_game_features(_schedules(), ratings=_ratings(), ngs=ngs).set_index("game_id")
-    assert baseline.loc["2024_02_KC_BUF", "cpoe_diff"] == poisoned.loc["2024_02_KC_BUF", "cpoe_diff"]
+    assert (
+        baseline.loc["2024_02_KC_BUF", "cpoe_diff"] == poisoned.loc["2024_02_KC_BUF", "cpoe_diff"]
+    )
 
 
 def test_future_games_kept_with_null_targets():
