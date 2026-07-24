@@ -86,3 +86,24 @@ def test_sample_weights_shift_ratings():
     w = np.where(df["team"] == "A", 10.0, 1.0)
     weighted = fit_ratings(df, alpha=0.01, weights=w).set_index("team")["off_rating"]
     assert not np.allclose(flat.values, weighted.values)
+
+
+def test_weights_aligned_to_prefilter_rows_with_null_target():
+    """weights must be filtered by the same mask as X/y, not passed through raw.
+
+    A caller supplies weights aligned to the ORIGINAL team_games frame (pre-filter). If
+    that frame has a null-target row, fit_ratings must drop that row's weight along with
+    the row itself -- not misalign weights against the filtered design matrix.
+    """
+    df_null = _round_robin()
+    df_null.loc[0, "epa_play"] = np.nan
+    w_null = np.where(df_null["team"] == "A", 10.0, 1.0)
+
+    with_null = fit_ratings(df_null, alpha=0.01, weights=w_null).set_index("team")["off_rating"]
+
+    mask = df_null["epa_play"].notna()
+    df_dropped = df_null[mask].reset_index(drop=True)
+    w_dropped = w_null[mask.to_numpy()]
+    dropped = fit_ratings(df_dropped, alpha=0.01, weights=w_dropped).set_index("team")["off_rating"]
+
+    pd.testing.assert_series_equal(with_null.sort_index(), dropped.sort_index())

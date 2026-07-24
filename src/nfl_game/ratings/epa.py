@@ -95,8 +95,13 @@ def fit_ratings(
     negated here.
 
     The league mean (the fitted intercept) is on `.attrs["league_mean"]`.
+
+    `weights`, when given, is expected to be aligned to `team_games` (i.e. pre-filter,
+    one entry per input row) -- it is filtered along with the rows dropped for a null
+    `target` before being passed to the model.
     """
-    df = team_games[team_games[target].notna()].copy()
+    mask = team_games[target].notna()
+    df = team_games[mask].copy()
     if df.empty:
         raise ValueError(f"no rows with non-null {target!r}")
 
@@ -105,6 +110,9 @@ def fit_ratings(
     dfn = pd.get_dummies(pd.Categorical(df["opponent"], categories=teams), prefix="def")
     X = pd.concat([off, dfn], axis=1).astype(float).to_numpy()
     y = df[target].to_numpy(dtype=float)
+
+    if weights is not None:
+        weights = np.asarray(weights)[mask.to_numpy()]
 
     model = Ridge(alpha=alpha, fit_intercept=True)
     model.fit(X, y, sample_weight=weights)
