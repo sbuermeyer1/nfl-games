@@ -1070,11 +1070,18 @@ def test_all_metrics_and_flags_present():
     assert out[NGS_METRICS].notna().all().all()
 
 
-def test_filters_to_regular_season():
-    p = _passing()
-    p["season_type"] = "POST"
-    out = team_week_ngs(p, _rushing(), _receiving())
-    assert "BUF" not in set(out["team"]) or out["cpoe_imputed"].all()
+def test_postseason_passing_rows_are_excluded():
+    """Falsifiable both ways: real cpoe when the row is REG, imputed when it is POST."""
+    p_reg = _passing()
+    p_post = _passing()
+    p_post["season_type"] = "POST"
+
+    reg = team_week_ngs(p_reg, _rushing(), _receiving()).set_index("team")
+    post = team_week_ngs(p_post, _rushing(), _receiving()).set_index("team")
+
+    assert reg.loc["BUF", "cpoe_imputed"] == 0
+    assert reg.loc["BUF", "cpoe"] == 4.0
+    assert post.loc["BUF", "cpoe_imputed"] == 1
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1732,17 +1739,22 @@ def test_walk_forward_only_scores_test_seasons():
 
 
 def test_walk_forward_never_trains_on_the_test_season():
-    """If a season leaked into its own training set, error would collapse."""
+    """A model fit on its own test season scores better in-sample. Honest
+    walk-forward error must be strictly worse than that leaked baseline —
+    no slack, because any slack is exactly where a real leak would hide."""
+    from nfl_game.model.predict import GameModel
+
     feats = _features()
     honest = walk_forward(feats, test_seasons=[2023], alpha=0.01)
     mae_honest = (honest["model_margin"] - honest["margin"]).abs().mean()
-    # a model fit on 2023 itself does markedly better; honest error must exceed it
-    from nfl_game.model.predict import GameModel
 
-    leaked = GameModel(alpha=0.01).fit(feats[feats["season"] == 2023])
-    p = leaked.predict(feats[feats["season"] == 2023])
-    mae_leaked = (p["model_margin"].to_numpy() - feats[feats["season"] == 2023]["margin"].to_numpy())
-    assert mae_honest > np.abs(mae_leaked).mean() - 1.0
+    test_rows = feats[feats["season"] == 2023]
+    leaked_pred = GameModel(alpha=0.01).fit(test_rows).predict(test_rows)
+    mae_leaked = np.abs(
+        leaked_pred["model_margin"].to_numpy() - test_rows["margin"].to_numpy()
+    ).mean()
+
+    assert mae_honest > mae_leaked
 
 
 def test_walk_forward_skips_season_with_no_prior_data():
