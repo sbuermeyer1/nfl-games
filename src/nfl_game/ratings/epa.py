@@ -1,10 +1,13 @@
 """Team strength from play-by-play EPA.
 
-team_game_epa reduces raw plays to one row per offense per game. fit_ratings (Task 4)
-turns those rows into opponent-adjusted offensive and defensive ratings.
+team_game_epa reduces raw plays to one row per offense per game. fit_ratings turns those
+rows into opponent-adjusted offensive and defensive ratings via ridge regression on
+offense-team and defense-team dummies.
 """
 
+import numpy as np
 import pandas as pd
+from sklearn.linear_model import Ridge
 
 TEAM_GAME_COLS = [
     "game_id",
@@ -70,3 +73,49 @@ def team_game_epa(pbp: pd.DataFrame) -> pd.DataFrame:
         return out[TEAM_GAME_COLS].sort_values(["season", "week", "team"]).reset_index(drop=True)
     else:
         return pd.DataFrame(columns=TEAM_GAME_COLS)
+
+
+def fit_ratings(
+    team_games: pd.DataFrame,
+    target: str = "epa_play",
+    alpha: float = 1.0,
+    weights: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Opponent-adjusted offensive and defensive ratings via ridge regression.
+
+    Regresses each team-game's `target` on offense-team and defense-team indicators.
+    This separates a team's own quality from the quality of who it happened to play —
+    without it, ratings mostly measure schedule luck.
+
+    Ridge shrinkage pulls thin-sample teams toward the league mean, which is what gives
+    early-season ratings a sane prior.
+
+    Returns one row per team with `off_rating` and `def_rating`, both oriented so that
+    **higher is better**. The raw defense coefficient means "EPA allowed", so it is
+    negated here.
+
+    The league mean (the fitted intercept) is on `.attrs["league_mean"]`.
+    """
+    df = team_games[team_games[target].notna()].copy()
+    if df.empty:
+        raise ValueError(f"no rows with non-null {target!r}")
+
+    teams = sorted(set(df["team"]) | set(df["opponent"]))
+    off = pd.get_dummies(pd.Categorical(df["team"], categories=teams), prefix="off")
+    dfn = pd.get_dummies(pd.Categorical(df["opponent"], categories=teams), prefix="def")
+    X = pd.concat([off, dfn], axis=1).astype(float).to_numpy()
+    y = df[target].to_numpy(dtype=float)
+
+    model = Ridge(alpha=alpha, fit_intercept=True)
+    model.fit(X, y, sample_weight=weights)
+
+    n = len(teams)
+    out = pd.DataFrame(
+        {
+            "team": teams,
+            "off_rating": model.coef_[:n],
+            "def_rating": -model.coef_[n:],
+        }
+    )
+    out.attrs["league_mean"] = float(model.intercept_)
+    return out
