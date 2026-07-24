@@ -12,6 +12,25 @@ from sklearn.linear_model import LinearRegression
 
 from nfl_game.model.predict import GameModel
 
+# Columns that must all be present for a game to enter any evaluate()-family metric.
+# Model and market are always compared on the identical game set, so a missing
+# spread_line (an unplayed game, or a season with no posted line) drops the row from
+# every metric rather than only from the ones that happen to touch that column.
+_REQUIRED_COLS = [
+    "margin",
+    "total_points",
+    "spread_line",
+    "total_line",
+    "model_margin",
+    "model_total",
+]
+
+
+def _valid_games(preds: pd.DataFrame) -> pd.DataFrame:
+    """Rows where model and market both have something to say, and the outcome is known."""
+    mask = preds[_REQUIRED_COLS].notna().all(axis=1)
+    return preds[mask]
+
 
 def walk_forward(
     features_df: pd.DataFrame,
@@ -28,7 +47,7 @@ def walk_forward(
             continue
         model = GameModel(estimator=estimator, alpha=alpha).fit(train)
         preds = model.predict(test)
-        merged = test.merge(preds, on="game_id", how="left")
+        merged = test.merge(preds, on="game_id", how="left", validate="one_to_one")
         frames.append(merged)
     if not frames:
         return pd.DataFrame(columns=[*features_df.columns, "model_margin", "model_total"])
@@ -42,7 +61,7 @@ def evaluate(preds: pd.DataFrame) -> dict:
     line. Exact pushes are excluded, which is why ats_n is reported alongside the rate.
     Break-even at standard -110 juice is 52.4%.
     """
-    d = preds[preds["margin"].notna()].copy()
+    d = _valid_games(preds)
 
     out = {
         "n_games": len(d),
@@ -82,7 +101,7 @@ def market_comparison_regression(preds: pd.DataFrame) -> dict:
     If model_coef is indistinguishable from zero, the model contributes nothing beyond
     what the closing line already knows. This is the decisive test.
     """
-    d = preds[preds["margin"].notna()]
+    d = _valid_games(preds)
     X = d[["spread_line", "model_margin"]].to_numpy(dtype=float)
     y = d["margin"].to_numpy(dtype=float)
     fit = LinearRegression().fit(X, y)
@@ -97,7 +116,7 @@ def market_comparison_regression(preds: pd.DataFrame) -> dict:
 
 def ats_by_threshold(preds: pd.DataFrame, thresholds=(0, 1, 2, 3, 4, 6)) -> pd.DataFrame:
     """ATS hit rate bucketed by how far the model disagrees with the line."""
-    d = preds[preds["margin"].notna()].copy()
+    d = _valid_games(preds).copy()
     d["edge"] = (d["model_margin"] - d["spread_line"]).abs()
     rows = []
     for t in thresholds:
