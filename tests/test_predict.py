@@ -75,3 +75,51 @@ def test_predict_before_fit_raises():
 
 def test_estimators_registry_exposes_both():
     assert set(ESTIMATORS) == {"ridge", "gbm"}
+
+
+def _mixed_scale_train(n=300, seed=0):
+    """Training data whose feature scales mirror the real ones.
+
+    The real FEATURE_COLS mix 0/1 flags, EPA rating diffs near 0.1, and temperatures
+    near 60. The signal lives entirely in the small-scale rating feature; temperature
+    is pure noise. An unscaled L2 penalty shrinks by raw coefficient size, so it
+    punishes the small-scale signal hardest and leaves the large-scale noise alone.
+    """
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame({c: rng.normal(size=n) for c in FEATURE_COLS})
+    df["game_id"] = [f"g{i}" for i in range(n)]
+    df["net_rating_diff"] = rng.normal(scale=0.1, size=n)
+    df["temp_outdoor"] = rng.normal(loc=60.0, scale=15.0, size=n)
+    df["wind_outdoor"] = rng.normal(loc=8.0, scale=5.0, size=n)
+    df["is_dome"] = rng.integers(0, 2, size=n)
+    df["margin"] = 30.0 * df["net_rating_diff"] + rng.normal(scale=0.5, size=n)
+    df["total_points"] = 44.0 + 20.0 * df["net_rating_diff"] + rng.normal(scale=0.5, size=n)
+    return df
+
+
+def test_predictions_are_invariant_to_feature_units():
+    """Changing a feature's units must not change what the model predicts.
+
+    Temperature in hundredths of a degree is the same information as temperature in
+    degrees. Any model whose output moves when only the units move is being steered
+    by scale rather than by signal.
+    """
+    train, test = _mixed_scale_train(), _mixed_scale_train(n=20, seed=1)
+    base = GameModel(estimator="ridge", alpha=10.0).fit(train).predict(test)
+
+    rescaled_train, rescaled_test = train.copy(), test.copy()
+    for frame in (rescaled_train, rescaled_test):
+        frame["temp_outdoor"] *= 100.0
+    rescaled = GameModel(estimator="ridge", alpha=10.0).fit(rescaled_train).predict(rescaled_test)
+
+    assert rescaled["model_margin"].to_numpy() == pytest.approx(
+        base["model_margin"].to_numpy(), abs=1e-6
+    )
+
+
+def test_ridge_recovers_signal_carried_by_a_small_scale_feature():
+    """The EPA ratings are the model's signal and they live on a ~0.1 scale."""
+    train = _mixed_scale_train()
+    pred = GameModel(estimator="ridge", alpha=10.0).fit(train).predict(train)
+    mae = np.abs(pred["model_margin"] - train["margin"]).mean()
+    assert mae < 1.0

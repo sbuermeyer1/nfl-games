@@ -8,11 +8,18 @@ needs to know which one is in use.
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from nfl_game.model.features import FEATURE_COLS
 
 ESTIMATORS = {
-    "ridge": lambda alpha: Ridge(alpha=alpha),
+    # Ridge penalises raw coefficient size, so it is only meaningful on standardised
+    # inputs. FEATURE_COLS mixes 0/1 flags, EPA rating diffs near 0.1, and temperatures
+    # near 60; unscaled, the penalty would fall hardest on the rating features that carry
+    # the signal and barely touch temperature. Standardising also keeps the ridge-vs-gbm
+    # comparison honest, since trees are scale-invariant either way.
+    "ridge": lambda alpha: make_pipeline(StandardScaler(), Ridge(alpha=alpha)),
     "gbm": lambda alpha: HistGradientBoostingRegressor(
         max_depth=3, learning_rate=0.05, max_iter=300, random_state=0
     ),
