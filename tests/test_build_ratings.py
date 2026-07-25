@@ -1,0 +1,77 @@
+import pandas as pd
+import pytest
+
+from nfl_game.ratings.build import build_ratings, decay_weights, ratings_by_week
+
+
+def _games():
+    rows = []
+    gid = 0
+    for season in (2023, 2024):
+        for week in range(1, 5):
+            for team, opp in (("A", "B"), ("B", "A"), ("C", "D"), ("D", "C")):
+                gid += 1
+                rows.append(
+                    {
+                        "game_id": f"g{gid}", "season": season, "week": week,
+                        "team": team, "opponent": opp, "is_home": 1,
+                        "epa_play": 0.1 if team in ("A", "C") else -0.1,
+                        "epa_pass": 0.1 if team in ("A", "C") else -0.1,
+                        "epa_rush": 0.05 if team in ("A", "C") else -0.05,
+                        "success_rate": 0.45, "n_pass": 30, "n_rush": 25,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_excludes_current_and_future_weeks():
+    """The central correctness property: no data at or after the as-of point."""
+    df = _games()
+    w = decay_weights(df, asof_season=2024, asof_week=3)
+    future = (df["season"] > 2024) | ((df["season"] == 2024) & (df["week"] >= 3))
+    assert (w[future.to_numpy()] == 0).all()
+    assert (w[~future.to_numpy()] > 0).all()
+
+
+def test_recent_games_weigh_more():
+    df = _games()
+    w = decay_weights(df, asof_season=2024, asof_week=5, halflife_games=2.0)
+    latest = (df["season"] == 2024) & (df["week"] == 4)
+    oldest = (df["season"] == 2023) & (df["week"] == 1)
+    assert w[latest.to_numpy()].mean() > w[oldest.to_numpy()].mean()
+
+
+def test_prior_season_downweighted_by_penalty():
+    df = _games()
+    w = decay_weights(df, asof_season=2024, asof_week=1, halflife_games=1e9, season_penalty=0.5)
+    prior = (df["season"] == 2023).to_numpy()
+    # halflife is effectively infinite, so any gap must come from the season penalty
+    assert w[prior].max() == pytest.approx(0.5, rel=1e-6)
+
+
+def test_build_ratings_returns_all_rating_columns():
+    out = build_ratings(_games(), asof_season=2024, asof_week=5)
+    expected = {
+        "team", "off_rating", "def_rating",
+        "off_rating_pass", "def_rating_pass",
+        "off_rating_rush", "def_rating_rush",
+    }
+    assert set(out.columns) == expected
+    assert sorted(out["team"]) == ["A", "B", "C", "D"]
+
+
+def test_build_ratings_orders_teams_correctly():
+    out = build_ratings(_games(), asof_season=2024, asof_week=5).set_index("team")
+    assert out.loc["A", "off_rating"] > out.loc["B", "off_rating"]
+
+
+def test_build_ratings_raises_when_no_prior_data():
+    with pytest.raises(ValueError, match="no games before"):
+        build_ratings(_games(), asof_season=2023, asof_week=1)
+
+
+def test_ratings_by_week_covers_every_week():
+    out = ratings_by_week(_games(), seasons=[2024])
+    assert sorted(out["week"].unique()) == [1, 2, 3, 4]
+    assert (out["season"] == 2024).all()
+    assert len(out) == 4 * 4  # 4 weeks x 4 teams
