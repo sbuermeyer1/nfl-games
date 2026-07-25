@@ -12,19 +12,16 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-# Columns fit() needs a real value in before a row can teach the calibrator anything:
-# the outcome columns (to know who covered/went over) and the four line/model columns
-# that make up the two edge features. A NaN in any of them propagates into the edge
-# (NaN - x is NaN) and LogisticRegression.fit raises on NaN input, so these rows would
-# crash fit() rather than merely being silently wrong.
-_REQUIRED_COLS = (
-    "margin",
-    "total_points",
-    "spread_line",
-    "total_line",
-    "model_margin",
-    "model_total",
-)
+# Columns each target needs a real value in before a row can teach that half of the
+# calibrator anything. The cover and over models are trained independently: a row
+# missing total_line still has a perfectly good margin/spread_line/model_margin and
+# should not be thrown out of cover training just because the total side is unusable.
+# A NaN in any of a target's own columns propagates into its edge (NaN - x is NaN) and
+# LogisticRegression.fit raises on NaN input, so rows failing a target's own filter
+# would crash fit() for that target specifically rather than merely being silently
+# wrong.
+_COVER_COLS = ("margin", "spread_line", "model_margin")
+_OVER_COLS = ("total_points", "total_line", "model_total")
 
 
 def brier_score(probs: np.ndarray, outcomes: np.ndarray) -> float:
@@ -50,31 +47,51 @@ class Calibrator:
         self._over = None
 
     def fit(self, preds: pd.DataFrame) -> "Calibrator":
-        mask = preds[list(_REQUIRED_COLS)].notna().all(axis=1)
-        d = preds[mask]
-
-        spread_edge = (d["model_margin"] - d["spread_line"]).to_numpy(dtype=float).reshape(-1, 1)
-        covered = (d["margin"] > d["spread_line"]).astype(int).to_numpy()
+        cover_mask = preds[list(_COVER_COLS)].notna().all(axis=1)
+        d_cover = preds[cover_mask]
+        spread_edge = (
+            (d_cover["model_margin"] - d_cover["spread_line"]).to_numpy(dtype=float).reshape(-1, 1)
+        )
+        covered = (d_cover["margin"] > d_cover["spread_line"]).astype(int).to_numpy()
         self._cover = LogisticRegression().fit(spread_edge, covered)
 
-        total_edge = (d["model_total"] - d["total_line"]).to_numpy(dtype=float).reshape(-1, 1)
-        went_over = (d["total_points"] > d["total_line"]).astype(int).to_numpy()
+        over_mask = preds[list(_OVER_COLS)].notna().all(axis=1)
+        d_over = preds[over_mask]
+        total_edge = (
+            (d_over["model_total"] - d_over["total_line"]).to_numpy(dtype=float).reshape(-1, 1)
+        )
+        went_over = (d_over["total_points"] > d_over["total_line"]).astype(int).to_numpy()
         self._over = LogisticRegression().fit(total_edge, went_over)
         return self
 
     def predict(self, preds: pd.DataFrame) -> pd.DataFrame:
         if self._cover is None or self._over is None:
             raise RuntimeError("call fit() before predict()")
-        spread_edge = (
-            (preds["model_margin"] - preds["spread_line"]).to_numpy(dtype=float).reshape(-1, 1)
-        )
-        total_edge = (
-            (preds["model_total"] - preds["total_line"]).to_numpy(dtype=float).reshape(-1, 1)
-        )
+
+        cover_prob = np.full(len(preds), np.nan)
+        cover_ok = (preds["model_margin"].notna() & preds["spread_line"].notna()).to_numpy()
+        if cover_ok.any():
+            spread_edge = (
+                (preds.loc[cover_ok, "model_margin"] - preds.loc[cover_ok, "spread_line"])
+                .to_numpy(dtype=float)
+                .reshape(-1, 1)
+            )
+            cover_prob[cover_ok] = self._cover.predict_proba(spread_edge)[:, 1]
+
+        over_prob = np.full(len(preds), np.nan)
+        over_ok = (preds["model_total"].notna() & preds["total_line"].notna()).to_numpy()
+        if over_ok.any():
+            total_edge = (
+                (preds.loc[over_ok, "model_total"] - preds.loc[over_ok, "total_line"])
+                .to_numpy(dtype=float)
+                .reshape(-1, 1)
+            )
+            over_prob[over_ok] = self._over.predict_proba(total_edge)[:, 1]
+
         return pd.DataFrame(
             {
                 "game_id": preds["game_id"].to_numpy(),
-                "cover_prob": self._cover.predict_proba(spread_edge)[:, 1],
-                "over_prob": self._over.predict_proba(total_edge)[:, 1],
+                "cover_prob": cover_prob,
+                "over_prob": over_prob,
             }
         )
