@@ -47,8 +47,14 @@ class Calibrator:
         self._over = None
 
     def fit(self, preds: pd.DataFrame) -> "Calibrator":
+        # A push (outcome exactly equal to the line) returns the stake -- it is not a
+        # loss for the home/over side, so it must not train as one. backtest.evaluate
+        # already excludes exact pushes from ats_hit_rate/ou_hit_rate on this same
+        # reasoning; matching that here keeps "cover"/"over" meaning the same thing
+        # everywhere in the codebase instead of two contradictory definitions.
         cover_mask = preds[list(_COVER_COLS)].notna().all(axis=1)
         d_cover = preds[cover_mask]
+        d_cover = d_cover[d_cover["margin"] != d_cover["spread_line"]]
         spread_edge = (
             (d_cover["model_margin"] - d_cover["spread_line"]).to_numpy(dtype=float).reshape(-1, 1)
         )
@@ -57,6 +63,7 @@ class Calibrator:
 
         over_mask = preds[list(_OVER_COLS)].notna().all(axis=1)
         d_over = preds[over_mask]
+        d_over = d_over[d_over["total_points"] != d_over["total_line"]]
         total_edge = (
             (d_over["model_total"] - d_over["total_line"]).to_numpy(dtype=float).reshape(-1, 1)
         )

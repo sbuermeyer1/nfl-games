@@ -100,6 +100,17 @@ def test_markdown_renders_every_game():
     assert md.startswith("|")
 
 
+def test_markdown_game_column_is_away_at_home_not_flipped():
+    # slate_markdown must render "{away} @ {home}", never the reverse. The brief-mandated
+    # test above only checks substring presence, so "BUF @ KC" would pass just as readily
+    # as the correct "KC @ BUF" -- pin the exact substring for both games.
+    md = slate_markdown(build_slate(*_inputs()))
+    assert "KC @ BUF" in md
+    assert "BUF @ KC" not in md
+    assert "MIA @ NYJ" in md
+    assert "NYJ @ MIA" not in md
+
+
 def test_markdown_handles_missing_cover_prob_without_rendering_nan():
     # Calibrator.predict returns NaN cover_prob for a row missing spread_line (e.g. a
     # not-yet-posted line on an upcoming slate) while still returning a real over_prob.
@@ -110,3 +121,105 @@ def test_markdown_handles_missing_cover_prob_without_rendering_nan():
     probs.loc[0, "cover_prob"] = float("nan")
     md = slate_markdown(build_slate(feats, preds, probs))
     assert "nan%" not in md
+
+
+def test_markdown_handles_missing_spread_line_without_rendering_nan_anywhere():
+    # A missing spread_line propagates NaN into market_spread, spread_gap, and
+    # cover_prob alike -- the "nan reads as a data bug" rationale applies identically
+    # to all of them, not just the probability column. The previous test only checked
+    # "nan%" not in md, which passed even though market_spread/spread_gap still
+    # rendered "nan"/"+nan" literally; this pins the full row instead.
+    feats, preds, probs = _inputs()
+    feats = feats.copy()
+    probs = probs.copy()
+    feats.loc[0, "spread_line"] = float("nan")
+    probs.loc[0, "cover_prob"] = float("nan")
+    out = build_slate(feats, preds, probs)
+    md = slate_markdown(out)
+
+    assert "nan" not in md.lower()
+    row = out.set_index("game_id").loc["2026_01_KC_BUF"]
+    assert pd.isna(row["market_spread"]) and pd.isna(row["spread_gap"])
+    lines = [line for line in md.splitlines() if "KC @ BUF" in line]
+    assert len(lines) == 1
+    cells = [c.strip() for c in lines[0].strip("|").split("|")]
+    # Game, Model, Market, Gap, Cover%, Model O/U, Market O/U, Gap, Over%, Edge
+    assert cells[2] == "n/a"  # market spread
+    assert cells[3] == "n/a"  # spread gap
+    assert cells[4] == "n/a"  # cover%
+
+
+def test_model_and_market_spread_columns_are_not_swapped():
+    # Nothing in the brief-mandated tests pins model_spread/market_spread individually
+    # -- test_gap_is_model_minus_market only checks spread_gap, which is computed
+    # independently and stays correct even if the two source columns were swapped.
+    # Swapping them would invert every displayed pick.
+    row = build_slate(*_inputs()).set_index("game_id").loc["2026_01_KC_BUF"]
+    assert (row["model_spread"], row["market_spread"]) == (6.0, 2.5)
+
+
+def test_cover_and_over_prob_columns_are_not_swapped():
+    row = build_slate(*_inputs()).set_index("game_id").loc["2026_01_KC_BUF"]
+    assert (row["cover_prob"], row["over_prob"]) == (0.58, 0.55)
+
+
+def _inputs_edge_cases():
+    """Fixture for the sort/edge_flag mutants the plain two-game _inputs() fixture
+    can't distinguish: a negative gap bigger in magnitude than any positive gap (so
+    sorting by signed value gives a different order than sorting by absolute value), a
+    gap exactly at the default edge_threshold (so `>` vs `>=` differ), and a game whose
+    total_gap is large while its spread_gap is small (so edge_flag driven by total_gap
+    instead of spread_gap would flag it incorrectly)."""
+    feats = pd.DataFrame(
+        {
+            "game_id": ["g_pos", "g_neg", "g_at_threshold", "g_total_only"],
+            "season": [2026, 2026, 2026, 2026],
+            "week": [2, 2, 2, 2],
+            "home_team": ["BBB", "DDD", "FFF", "HHH"],
+            "away_team": ["AAA", "CCC", "EEE", "GGG"],
+            "spread_line": [1.0, 5.0, 3.0, 0.0],
+            "total_line": [40.0, 44.0, 45.0, 40.0],
+        }
+    )
+    preds = pd.DataFrame(
+        {
+            "game_id": ["g_pos", "g_neg", "g_at_threshold", "g_total_only"],
+            "model_margin": [4.0, -1.0, 5.0, 0.5],
+            "model_total": [41.0, 44.5, 45.0, 48.0],
+        }
+    )
+    probs = pd.DataFrame(
+        {
+            "game_id": ["g_pos", "g_neg", "g_at_threshold", "g_total_only"],
+            "cover_prob": [0.55, 0.40, 0.60, 0.51],
+            "over_prob": [0.52, 0.51, 0.50, 0.75],
+        }
+    )
+    return feats, preds, probs
+
+
+# spread_gap: g_pos=+3.0, g_neg=-6.0, g_at_threshold=+2.0, g_total_only=+0.5
+# total_gap:  g_pos=+1.0, g_neg=+0.5, g_at_threshold=+0.0, g_total_only=+8.0
+
+
+def test_sorted_by_absolute_edge_not_signed_edge():
+    # g_neg's gap (-6.0) is the largest by absolute value but the smallest (most
+    # negative) by signed value. Sorting by signed value descending would put it last;
+    # sorting by absolute value descending puts it first.
+    out = build_slate(*_inputs_edge_cases())
+    assert list(out["game_id"])[:2] == ["g_neg", "g_pos"]
+
+
+def test_edge_flag_threshold_is_inclusive():
+    # g_at_threshold's spread_gap is exactly 2.0, equal to the default edge_threshold.
+    # The brief specifies `>=`, so this must flag; a `>` mutant would not.
+    out = build_slate(*_inputs_edge_cases()).set_index("game_id")
+    assert out.loc["g_at_threshold", "edge_flag"] == 1
+
+
+def test_edge_flag_is_driven_by_spread_gap_not_total_gap():
+    # g_total_only has a small spread_gap (0.5, below threshold) but a large total_gap
+    # (8.0, above threshold). edge_flag must stay 0: it flags spread disagreement only.
+    out = build_slate(*_inputs_edge_cases()).set_index("game_id")
+    assert out.loc["g_total_only", "edge_flag"] == 0
+    assert out.loc["g_total_only", "total_gap"] == 8.0

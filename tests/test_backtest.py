@@ -61,6 +61,29 @@ def test_walk_forward_skips_season_with_no_prior_data():
     assert sorted(out["season"].unique()) == [2022]
 
 
+def test_walk_forward_skips_a_fold_with_a_degenerate_training_slice():
+    """A training slice that GameModel.fit refuses (too few distinct values for some
+    feature to support a coefficient) must be skipped exactly like a season with no
+    prior data at all -- a fold that cannot be trained should not contribute
+    predictions to the caller (e.g. a calibration corpus)."""
+    feats = _features(seasons=(2021, 2022, 2023))
+    # Collapse 2021's rest_diff to a handful of imputed-looking values (mirroring the
+    # real ryoe_diff pattern): mostly one value, with only two rows carrying anything
+    # different. Its std stays well above the RobustStandardScaler eps floor, so this
+    # is specifically the "too few distinct values" failure the new guard exists for,
+    # not the already-fixed near-zero-variance one.
+    n2021 = (feats["season"] == 2021).sum()
+    degenerate = np.zeros(n2021)
+    degenerate[0], degenerate[1] = 1.5, -1.5
+    feats.loc[feats["season"] == 2021, "rest_diff"] = degenerate
+
+    # test season 2022 trains on 2021 alone -> degenerate -> must be skipped.
+    # test season 2023 trains on 2021+2022 combined -> 2022's healthy rest_diff values
+    # give it plenty of distinct values -> must still be scored.
+    out = walk_forward(feats, test_seasons=[2022, 2023])
+    assert sorted(out["season"].unique()) == [2023]
+
+
 def test_evaluate_reports_model_and_market_mae():
     out = walk_forward(_features(), test_seasons=[2022, 2023])
     m = evaluate(out)

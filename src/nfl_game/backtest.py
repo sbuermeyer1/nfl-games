@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from nfl_game.model.predict import GameModel
+from nfl_game.model.predict import DegenerateFeatureError, GameModel
 
 # Columns that must all be present for a game to enter any evaluate()-family metric.
 # Model and market are always compared on the identical game set, so a missing
@@ -45,7 +45,13 @@ def walk_forward(
         test = features_df[features_df["season"] == season]
         if train.empty or test.empty:
             continue
-        model = GameModel(estimator=estimator, alpha=alpha).fit(train)
+        try:
+            model = GameModel(estimator=estimator, alpha=alpha).fit(train)
+        except DegenerateFeatureError:
+            # A training slice that can't support a stable coefficient for some
+            # feature shouldn't contribute predictions at all -- same treatment as a
+            # season with no prior data.
+            continue
         preds = model.predict(test)
         merged = test.merge(preds, on="game_id", how="left", validate="one_to_one")
         frames.append(merged)

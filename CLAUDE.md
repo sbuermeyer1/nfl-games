@@ -13,6 +13,27 @@ before assuming any extension exists.
     .\.venv\Scripts\python.exe -m pytest
     .\.venv\Scripts\python.exe -m ruff check .
 
+`scripts/` is the project's entire user interface -- run in this order:
+
+    .\.venv\Scripts\python.exe scripts\build_dataset.py --start-season 2016 --end-season 2025
+    .\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
+    .\.venv\Scripts\python.exe scripts\slate.py --season 2025 --week 1
+
+- `build_dataset.py` loads pbp/schedules/NGS, builds as-of ratings and features, and
+  writes `data/processed/game_features.parquet`. Run this first, and rerun it whenever
+  `--start-season`/`--end-season` changes or upstream data is refreshed; everything else
+  reads the cached parquet rather than hitting `nflreadpy` itself.
+- `backtest.py` runs `walk_forward` over `--test-seasons` (a `lo-hi` range) and prints
+  margin/total MAE against the market, ATS/O-U hit rates, ATS by edge threshold, and
+  `market_comparison_regression`. This is the acceptance test -- see "Reading the
+  backtest" below.
+- `slate.py --season Y --week W` fits `GameModel` on every season before `Y`, calibrates
+  on `walk_forward` predictions from every season before `Y` (letting `walk_forward` skip
+  whatever it must -- see the degenerate-feature note below), and writes/prints a
+  markdown table comparing model and market for that week's games. Both `--estimator`
+  (`ridge`/`gbm`) and `--alpha` are shared with `backtest.py`; `--edge-threshold` controls
+  when `edge_flag` fires (default 2.0 points).
+
 ## Data sourcing
 
 All data comes from `nflreadpy`. No API key, no scraping. `load_schedules()` carries the
@@ -36,29 +57,56 @@ reverse dependencies.
   cutoff and uses strictly prior data. This is the project's central correctness property
   and is tested directly.
 - `model/calibrate.py` — must be fit on walk-forward predictions, never in-sample.
+  `Calibrator.fit` excludes exact pushes (`margin == spread_line` / `total_points ==
+  total_line`) from training for both targets, matching `backtest.evaluate`'s own
+  treatment: a push returns the stake, so it is not a "did not cover" outcome.
+- `market/compare.py` — `build_slate` joins `GameModel` predictions and `Calibrator`
+  probabilities onto a week's games and flags disagreements; `slate_markdown` renders it.
+  `model_spread`/`market_spread` are both home-team margins (nflverse's `spread_line`
+  convention, positive = home favored) end to end — keeping one sign convention is what
+  keeps this from quietly inverting every pick. `edge_flag` is 1 when
+  `abs(spread_gap) >= edge_threshold`; it is a flag, not advice.
 
 ## Reading the backtest
 
-The market is the benchmark. Market margin MAE is around 9.8–10.3 points; matching it is a
-good result. A model MAE far below the market's, or an ATS hit rate above ~0.56, is
-overwhelmingly likely to be a data leak rather than an edge — audit the as-of joins first.
-`market_comparison_regression` is the decisive test: if `model_coef` is near zero, the
-model adds nothing the closing line doesn't already contain.
+The market is the benchmark. `scripts/backtest.py --test-seasons 2021-2025` measures
+market margin MAE at 9.752 points; matching it is a good result. A model MAE meaningfully
+below the market's, or an ATS hit rate above ~0.56, is overwhelmingly likely to be a data
+leak rather than an edge — audit the as-of joins first. `market_comparison_regression` is
+the decisive test: if `model_coef` is near zero, the model adds nothing the closing line
+doesn't already contain.
 
-## Known issue: ryoe_diff near-zero variance poisons early walk-forward calibration
+## Degenerate training features
 
-`scripts/slate.py` fits `Calibrator` on `walk_forward(feats, prior_seasons[1:], ...)`,
-which for a season like 2025 includes test season 2017 — trained on 2016 alone. In 2016,
-`ryoe_diff` is constant to floating-point noise (std ~1e-17, NGS rushing data is too new
-for real signal yet). `GameModel`'s ridge pipeline standardizes features on the training
-set, so `StandardScaler` divides by that near-zero std, and any 2017 test row with a
-nonzero `ryoe_diff` explodes into a `model_margin`/`model_total` on the order of 1e15
-(confirmed: `2017_02_CHI_TB` and `2017_02_MIA_LAC`, both models). Those two rows dominate
-the `LogisticRegression` loss enough to drag both fitted coefficients to ~0, so
-`Calibrator.predict` returns `cover_prob`/`over_prob` of exactly 0.500000 for every game
-in the 2025 week 1 slate — a real bug, not genuine 50/50 calibration. `scripts/backtest.py`
-is unaffected because Task 9's `--test-seasons 2021-2025` always trains on 5+ prior
-seasons, where `ryoe_diff` already has healthy variance (std > 0.7 by 2018). Fixing this
-needs either a variance floor in the ridge `StandardScaler` step or an as-of ratings fix
-in `ratings/`, both reserved for human review — flagging here rather than patching around
-it in `market/`.
+Ridge is scale-sensitive, so `GameModel`'s ridge pipeline standardizes `FEATURE_COLS`
+before fitting. Two different ways a training slice can defeat that safely are both
+guarded against now:
+
+- **`RobustStandardScaler`** (`model/predict.py`) floors any feature's fitted `scale_` to
+  1.0 if it falls below `10 * eps` (~2.22e-15) — sklearn's own constant-feature fallback,
+  which its own mean-relative check can't reach for a feature that is constant to
+  floating-point noise but happens to have a mean near zero (e.g. `ryoe_diff` trained on
+  2016 alone: std ~1e-17). Without this, `StandardScaler` divides by that near-zero
+  number and any later row with a real value explodes into a `model_margin` on the order
+  of 1e15.
+- **The degenerate-feature guard** (`GameModel.fit`, via `_degenerate_features`) catches
+  the milder case the scaler floor can't: a feature whose variance is nowhere near that
+  epsilon floor but that still has too few distinct values to support a coefficient,
+  because almost every row shares the same imputed default. `ryoe_diff` trained on
+  2016+2017 (512 rows) has std ~1.05e-2 — comfortably above the scaler's floor — but only
+  5 distinct values (416 rows at 0.0, ~94 at float noise around it, 2 rows with a real
+  signal). The guard skips columns whose values are only 0/1 (legitimate indicator flags
+  like `is_dome`/`div_game`/`ngs_imputed_any`, which always take just two values and are
+  not degenerate) and raises `DegenerateFeatureError` if any other column has fewer than
+  `MIN_DISTINCT_VALUES = 10` distinct values in the training slice — comfortably below
+  `rest_diff`'s minimum in every fold that isn't already flagged by `ryoe_diff` (15, from
+  the 2019 fold onward; the one exception, the 2017 fold, sees 13 but is already
+  degenerate on `ryoe_diff` regardless), and comfortably above the two poisoned folds'
+  3 and 5. `walk_forward` catches this and
+  skips the fold, the same way it already skips a season with no prior training data, so
+  a fold that can't be trained never contributes predictions to a caller (e.g. the
+  calibration corpus `scripts/slate.py` builds).
+
+Both guards only ever change behavior for a feature below their respective threshold;
+neither alters a healthy multi-season fold, which is why Task 9's backtest numbers are
+unchanged by either.

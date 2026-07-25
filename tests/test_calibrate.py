@@ -150,6 +150,65 @@ def test_fit_trains_cover_model_independently_of_total_line_nulls():
     pd.testing.assert_series_equal(base_out["cover_prob"], gap_out["cover_prob"], check_names=False)
 
 
+def test_pushes_do_not_depress_the_intercept():
+    """A push (margin == spread_line) returns the stake -- it is not a loss for the
+    home side. Training `covered` as `margin > spread_line` with no push filter counts
+    every push as "did not cover", which pulls the fitted intercept down and produces
+    an artificially low cover_prob at zero edge.
+
+    Build a sample that is half genuine, edge-independent 50/50 outcomes (so the
+    honest zero-edge cover probability is ~0.5) and half exact pushes concentrated at
+    zero edge. If pushes were miscounted as losses, cover_prob at zero edge would be
+    pulled well below 0.5; excluding them (matching backtest.evaluate's own treatment)
+    must keep it near 0.5."""
+    rng = np.random.default_rng(0)
+    n_real = 400
+    spread = rng.normal(scale=6.0, size=n_real)
+    edge = rng.normal(scale=3.0, size=n_real)
+    real = pd.DataFrame(
+        {
+            "game_id": [f"r{i}" for i in range(n_real)],
+            "spread_line": spread,
+            "model_margin": spread + edge,
+            # outcome noise is independent of edge, so cover rate is ~50% at every edge
+            "margin": spread + rng.normal(scale=8.0, size=n_real),
+            "total_line": 45.0,
+            "model_total": 45.0,
+            # non-push noise on the total side -- this test targets spread pushes only
+            "total_points": 45.0 + rng.normal(scale=8.0, size=n_real),
+        }
+    )
+    real = real[real["margin"] != real["spread_line"]].reset_index(drop=True)
+
+    n_push = 400
+    push = pd.DataFrame(
+        {
+            "game_id": [f"p{i}" for i in range(n_push)],
+            "spread_line": 3.0,
+            "model_margin": 3.0,  # zero edge
+            "margin": 3.0,  # exact push
+            "total_line": 45.0,
+            "model_total": 45.0,
+            # non-push noise on the total side -- this test targets spread pushes only
+            "total_points": 45.0 + rng.normal(scale=8.0, size=n_push),
+        }
+    )
+    df = pd.concat([real, push], ignore_index=True)
+
+    c = Calibrator().fit(df)
+    zero_edge = pd.DataFrame(
+        {
+            "game_id": ["z"],
+            "spread_line": [0.0],
+            "model_margin": [0.0],
+            "total_line": [45.0],
+            "model_total": [45.0],
+        }
+    )
+    prob = c.predict(zero_edge).iloc[0]["cover_prob"]
+    assert prob == pytest.approx(0.5, abs=0.1)
+
+
 def test_reliability_table_mean_pred_within_bin_edges_but_observed_need_not_be():
     # Deliberately miscalibrated: low-probability predictions all turned out to be
     # correct (outcome 1) and high-probability predictions all turned out wrong

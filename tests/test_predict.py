@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from nfl_game.model.features import FEATURE_COLS
-from nfl_game.model.predict import ESTIMATORS, GameModel
+from nfl_game.model.predict import ESTIMATORS, DegenerateFeatureError, GameModel
 
 
 def _train(n=300, seed=0):
@@ -159,3 +159,59 @@ def test_near_constant_feature_with_near_zero_mean_does_not_explode_predictions(
 
     assert pred["model_margin"].abs().max() < 1000
     assert pred["model_total"].abs().max() < 1000
+
+
+def _degenerate_ryoe(n):
+    """Mirror the real 2018 walk-forward training fold's ryoe_diff exactly: 512 rows,
+    416 at 0.0, ~94 at float noise around it, only 2 rows carrying a real value. std
+    comes out to ~1.05e-2 -- far above RobustStandardScaler's ~2.22e-15 floor, so the
+    scaler does not catch it, but only 5 distinct values across the whole column."""
+    values = np.zeros(n)
+    values[0], values[1] = 0.1685771, -0.1685771
+    half = (n - 2) // 2
+    values[2 : 2 + half] = 2.775558e-17
+    values[2 + half : 2 + 2 * half] = -2.775558e-17
+    return values
+
+
+def test_degenerate_feature_with_few_distinct_values_raises():
+    """A feature whose variance is nowhere near sklearn's epsilon floor can still be
+    degenerate: too few distinct values to fit a coefficient on, because almost every
+    row shares the same imputed default. GameModel.fit must refuse to train on it
+    rather than silently letting the ridge pipeline learn noise as if it were signal."""
+    n = 512
+    train = _train(n=n)
+    train["ryoe_diff"] = _degenerate_ryoe(n)
+    assert train["ryoe_diff"].std() > 1e-4  # confirms this is NOT the eps-floor case
+    assert train["ryoe_diff"].nunique() < 10
+
+    with pytest.raises(DegenerateFeatureError, match="ryoe_diff"):
+        GameModel(estimator="ridge", alpha=1.0).fit(train)
+
+
+def test_degenerate_feature_guard_also_applies_to_gbm():
+    """The guard is about whether the training slice itself can support a coefficient
+    for that feature, not about which estimator is asked to fit it -- so it must fire
+    the same way regardless of estimator."""
+    n = 512
+    train = _train(n=n)
+    train["ryoe_diff"] = _degenerate_ryoe(n)
+    with pytest.raises(DegenerateFeatureError, match="ryoe_diff"):
+        GameModel(estimator="gbm").fit(train)
+
+
+def test_binary_flags_and_low_cardinality_healthy_features_do_not_trigger_the_guard():
+    """is_dome, div_game, and ngs_imputed_any are legitimate 0/1 indicator flags that
+    take only two values in every real fold -- that is normal, not degenerate, and must
+    be exempt. rest_diff is a small-range integer difference that has as few as 15
+    distinct values in the smallest real walk-forward training slice (season 2019,
+    trained on 2016-2018) -- comfortably healthy, and must not trip the guard either."""
+    n = 300
+    rng = np.random.default_rng(1)
+    train = _train(n=n)
+    train["is_dome"] = rng.integers(0, 2, size=n)
+    train["div_game"] = rng.integers(0, 2, size=n)
+    train["ngs_imputed_any"] = rng.integers(0, 2, size=n)
+    train["rest_diff"] = rng.integers(-6, 7, size=n)  # 13 possible values, like real data
+
+    GameModel(estimator="ridge", alpha=1.0).fit(train)  # must not raise

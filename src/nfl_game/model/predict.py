@@ -47,6 +47,46 @@ class RobustStandardScaler(StandardScaler):
         return self
 
 
+MIN_DISTINCT_VALUES = 10
+# Threshold for the degenerate-feature guard below. Picked from the real walk-forward
+# training slices in the calibration corpus (seasons 2017-2025): the smallest healthy
+# non-flag feature, rest_diff, never drops below 15 distinct values in any fold, while
+# the two poisoned folds (ryoe_diff trained on 2016 alone: 3 distinct values; trained on
+# 2016+2017: 5) sit well below that. 10 sits with margin on both sides and needs no
+# retuning as more seasons accumulate -- it is not relative to fold size.
+
+
+class DegenerateFeatureError(ValueError):
+    """A FEATURE_COLS column in this training slice can't support a coefficient."""
+
+
+def _degenerate_features(df: pd.DataFrame) -> list[str]:
+    """FEATURE_COLS columns with too few distinct values to fit a stable coefficient.
+
+    Skips columns whose only values are 0/1 -- deliberate indicator flags (is_dome,
+    div_game, ngs_imputed_any) legitimately take just two values in every fold; that is
+    normal, not degenerate. Every other FEATURE_COLS column is a continuous rating,
+    edge, or difference that is expected to vary case by case, so fewer than
+    MIN_DISTINCT_VALUES distinct values in a training slice means it has collapsed to a
+    handful of imputed defaults plus a few stray real observations. That is exactly the
+    2018 walk-forward fold in the real feature set: ryoe_diff there has std ~1.05e-2 --
+    far above RobustStandardScaler's ~2.22e-15 floor, so the scaler lets it through --
+    but only 5 distinct values across 512 rows (416 rows at 0.0, 94 at float noise
+    around it, and only 2 rows carrying an actual signal). A coefficient fit on that is
+    noise, not signal, regardless of how "non-zero" its variance looks.
+    """
+    bad = []
+    for col in FEATURE_COLS:
+        values = df[col].dropna()
+        if values.empty:
+            continue
+        if set(values.unique()) <= {0, 1}:
+            continue
+        if values.nunique() < MIN_DISTINCT_VALUES:
+            bad.append(col)
+    return bad
+
+
 ESTIMATORS = {
     # Ridge penalises raw coefficient size, so it is only meaningful on standardised
     # inputs. FEATURE_COLS mixes 0/1 flags, EPA rating diffs near 0.1, and temperatures
@@ -78,6 +118,16 @@ class GameModel:
         t = train[train["total_points"].notna()]
         self.n_train_margin_ = len(m)
         self.n_train_total_ = len(t)
+
+        for label, data in (("margin", m), ("total_points", t)):
+            bad = _degenerate_features(data)
+            if bad:
+                raise DegenerateFeatureError(
+                    f"training slice for target {label!r} ({len(data)} rows) has "
+                    f"degenerate feature(s) {bad}: fewer than {MIN_DISTINCT_VALUES} "
+                    "distinct non-binary values. Refusing to fit -- this slice cannot "
+                    "support a stable coefficient for it."
+                )
 
         self._margin = ESTIMATORS[self.estimator](self.alpha)
         self._margin.fit(m[FEATURE_COLS].to_numpy(dtype=float), m["margin"].to_numpy(dtype=float))
