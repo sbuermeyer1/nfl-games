@@ -209,6 +209,67 @@ def test_pushes_do_not_depress_the_intercept():
     assert prob == pytest.approx(0.5, abs=0.1)
 
 
+def test_total_pushes_do_not_depress_the_intercept():
+    """The over/under mirror of test_pushes_do_not_depress_the_intercept.
+
+    Calibrator.fit filters pushes on BOTH targets, but the spread half was the only
+    one with coverage: deleting the `total_points != total_line` filter left the whole
+    suite green. That is the same asymmetry that let every over_prob mutation survive
+    in Task 10 -- the cover side pinned, the over side unguarded -- so it is pinned
+    here explicitly.
+
+    Same construction as the spread test with the roles swapped: half genuine,
+    edge-independent 50/50 totals outcomes, half exact total pushes concentrated at
+    zero edge, and non-push noise on the spread side so only the total filter is
+    under test."""
+    rng = np.random.default_rng(0)
+    n_real = 400
+    total_line = 45.0 + rng.normal(scale=4.0, size=n_real)
+    edge = rng.normal(scale=3.0, size=n_real)
+    real = pd.DataFrame(
+        {
+            "game_id": [f"r{i}" for i in range(n_real)],
+            # non-push noise on the spread side -- this test targets total pushes only
+            "spread_line": 3.0,
+            "model_margin": 3.0,
+            "margin": 3.0 + rng.normal(scale=8.0, size=n_real),
+            "total_line": total_line,
+            "model_total": total_line + edge,
+            # outcome noise is independent of edge, so the over rate is ~50% at every edge
+            "total_points": total_line + rng.normal(scale=8.0, size=n_real),
+        }
+    )
+    real = real[real["total_points"] != real["total_line"]].reset_index(drop=True)
+
+    n_push = 400
+    push = pd.DataFrame(
+        {
+            "game_id": [f"p{i}" for i in range(n_push)],
+            # non-push noise on the spread side -- this test targets total pushes only
+            "spread_line": 3.0,
+            "model_margin": 3.0,
+            "margin": 3.0 + rng.normal(scale=8.0, size=n_push),
+            "total_line": 44.0,
+            "model_total": 44.0,  # zero edge
+            "total_points": 44.0,  # exact push
+        }
+    )
+    df = pd.concat([real, push], ignore_index=True)
+
+    c = Calibrator().fit(df)
+    zero_edge = pd.DataFrame(
+        {
+            "game_id": ["z"],
+            "spread_line": [0.0],
+            "model_margin": [0.0],
+            "total_line": [44.0],
+            "model_total": [44.0],
+        }
+    )
+    prob = c.predict(zero_edge).iloc[0]["over_prob"]
+    assert prob == pytest.approx(0.5, abs=0.1)
+
+
 def test_reliability_table_mean_pred_within_bin_edges_but_observed_need_not_be():
     # Deliberately miscalibrated: low-probability predictions all turned out to be
     # correct (outcome 1) and high-probability predictions all turned out wrong

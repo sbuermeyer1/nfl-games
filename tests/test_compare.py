@@ -149,6 +149,34 @@ def test_markdown_handles_missing_spread_line_without_rendering_nan_anywhere():
     assert cells[4] == "n/a"  # cover%
 
 
+def test_markdown_handles_missing_total_line_without_rendering_nan_anywhere():
+    # The over/under mirror of the test above. Both halves of the "n/a" guard were
+    # fixed together, but only the spread half was pinned: reverting market_total and
+    # total_gap to a raw format() left the whole suite green, because no test nulled
+    # total_line. An upcoming slate can have a posted spread and no posted total just
+    # as easily as the reverse.
+    feats, preds, probs = _inputs()
+    feats = feats.copy()
+    probs = probs.copy()
+    feats.loc[0, "total_line"] = float("nan")
+    probs.loc[0, "over_prob"] = float("nan")
+    out = build_slate(feats, preds, probs)
+    md = slate_markdown(out)
+
+    assert "nan" not in md.lower()
+    row = out.set_index("game_id").loc["2026_01_KC_BUF"]
+    assert pd.isna(row["market_total"]) and pd.isna(row["total_gap"])
+    lines = [line for line in md.splitlines() if "KC @ BUF" in line]
+    assert len(lines) == 1
+    cells = [c.strip() for c in lines[0].strip("|").split("|")]
+    # Game, Model, Market, Gap, Cover%, Model O/U, Market O/U, Gap, Over%, Edge
+    assert cells[6] == "n/a"  # market total
+    assert cells[7] == "n/a"  # total gap
+    assert cells[8] == "n/a"  # over%
+    # the spread side still carries real values -- only the total side is missing
+    assert cells[2] == "+2.5"
+
+
 def test_model_and_market_spread_columns_are_not_swapped():
     # Nothing in the brief-mandated tests pins model_spread/market_spread individually
     # -- test_gap_is_model_minus_market only checks spread_gap, which is computed

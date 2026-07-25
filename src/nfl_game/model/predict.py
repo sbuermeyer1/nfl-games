@@ -50,10 +50,13 @@ class RobustStandardScaler(StandardScaler):
 MIN_DISTINCT_VALUES = 10
 # Threshold for the degenerate-feature guard below. Picked from the real walk-forward
 # training slices in the calibration corpus (seasons 2017-2025): the smallest healthy
-# non-flag feature, rest_diff, never drops below 15 distinct values in any fold, while
-# the two poisoned folds (ryoe_diff trained on 2016 alone: 3 distinct values; trained on
-# 2016+2017: 5) sit well below that. 10 sits with margin on both sides and needs no
-# retuning as more seasons accumulate -- it is not relative to fold size.
+# non-flag feature, rest_diff, holds at least 15 distinct values from the 2019 fold
+# onward. The one fold where it goes lower is 2017, at 13 -- and that fold is already
+# rejected on ryoe_diff regardless, so 13 is the true floor across folds this guard is
+# meant to let through. The two poisoned folds (ryoe_diff trained on 2016 alone: 3
+# distinct values; trained on 2016+2017: 5) sit well below. 10 sits with margin on both
+# sides and needs no retuning as more seasons accumulate -- it is not relative to fold
+# size. Keep this in step with the same account in CLAUDE.md.
 
 
 class DegenerateFeatureError(ValueError):
