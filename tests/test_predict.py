@@ -189,6 +189,20 @@ def test_degenerate_feature_with_few_distinct_values_raises():
         GameModel(estimator="ridge", alpha=1.0).fit(train)
 
 
+def test_all_nan_feature_column_is_treated_as_degenerate():
+    """The most degenerate column possible must not be the one case exempted.
+
+    An all-NaN column used to be skipped by the guard and then reach Ridge.fit, which
+    raises a raw sklearn ValueError that walk_forward does not catch -- so a single bad
+    column crashed the entire backtest instead of dropping one fold.
+    """
+    train = _train(n=300)
+    train["ryoe_diff"] = np.nan
+
+    with pytest.raises(DegenerateFeatureError, match="ryoe_diff"):
+        GameModel(estimator="ridge", alpha=1.0).fit(train)
+
+
 def test_degenerate_feature_guard_also_applies_to_gbm():
     """The guard is about whether the training slice itself can support a coefficient
     for that feature, not about which estimator is asked to fit it -- so it must fire

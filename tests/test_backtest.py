@@ -84,6 +84,28 @@ def test_walk_forward_skips_a_fold_with_a_degenerate_training_slice():
     assert sorted(out["season"].unique()) == [2023]
 
 
+def test_skipping_a_degenerate_fold_warns():
+    """Dropping a fold must be visible to the operator.
+
+    walk_forward backs the project's acceptance test and feeds the calibration corpus,
+    so a fold disappearing silently shrinks the sample with no signal that it happened.
+    """
+    feats = _features(seasons=(2021, 2022, 2023))
+    n2021 = (feats["season"] == 2021).sum()
+    degenerate = np.zeros(n2021)
+    degenerate[0], degenerate[1] = 1.5, -1.5
+    feats.loc[feats["season"] == 2021, "rest_diff"] = degenerate
+
+    with pytest.warns(RuntimeWarning, match="skipping test season 2022"):
+        walk_forward(feats, test_seasons=[2022, 2023])
+
+
+def test_healthy_folds_do_not_warn(recwarn):
+    """The converse: a clean run must stay quiet, or the warning becomes noise."""
+    walk_forward(_features(), test_seasons=[2022, 2023])
+    assert [w for w in recwarn.list if issubclass(w.category, RuntimeWarning)] == []
+
+
 def test_evaluate_reports_model_and_market_mae():
     out = walk_forward(_features(), test_seasons=[2022, 2023])
     m = evaluate(out)

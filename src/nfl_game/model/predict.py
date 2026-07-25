@@ -82,6 +82,11 @@ def _degenerate_features(df: pd.DataFrame) -> list[str]:
     for col in FEATURE_COLS:
         values = df[col].dropna()
         if values.empty:
+            # An all-NaN column is the most degenerate case there is, so it must not be
+            # the one case exempted. Falling through to Ridge.fit would raise a raw
+            # sklearn "Input X contains NaN" that walk_forward does not catch, crashing
+            # the whole backtest instead of skipping the one bad fold.
+            bad.append(col)
             continue
         if set(values.unique()) <= {0, 1}:
             continue

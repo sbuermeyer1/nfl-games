@@ -6,6 +6,8 @@ the only question that really matters: does the model add anything the line does
 already contain?
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
@@ -47,10 +49,17 @@ def walk_forward(
             continue
         try:
             model = GameModel(estimator=estimator, alpha=alpha).fit(train)
-        except DegenerateFeatureError:
+        except DegenerateFeatureError as exc:
             # A training slice that can't support a stable coefficient for some
             # feature shouldn't contribute predictions at all -- same treatment as a
-            # season with no prior data.
+            # season with no prior data. Warn rather than drop it silently: this
+            # function backs the project's acceptance test, and a fold vanishing
+            # without a word would shrink the corpus with no operator-visible signal.
+            warnings.warn(
+                f"skipping test season {season}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             continue
         preds = model.predict(test)
         merged = test.merge(preds, on="game_id", how="left", validate="one_to_one")

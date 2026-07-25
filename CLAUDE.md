@@ -86,6 +86,28 @@ leak rather than an edge — audit the as-of joins first. `market_comparison_reg
 the decisive test: if `model_coef` is near zero, the model adds nothing the closing line
 doesn't already contain.
 
+**The current result is that the model ties the market without beating it, and that is
+the success case, not a failure.** Do not "improve" it into an edge.
+
+### Regression baseline
+
+`scripts/backtest.py --test-seasons 2021-2025` (ridge, the default) must produce:
+
+| metric | model | market |
+| --- | --- | --- |
+| games | 1359 | — |
+| margin MAE | 10.274 | 9.752 |
+| total MAE | 10.684 | 10.309 |
+| ATS hit rate | 0.4977 (n=1326) | — |
+| O/U hit rate | 0.5022 (n=1348) | — |
+| model_coef | -0.0218 | market_coef 1.0755 |
+| r² | 0.2083 | — |
+
+Treat these as an invariant: any change that is not deliberately a behavior change must
+leave them untouched. If they move, stop and find out why before going further — and read
+the paragraph above before judging the direction, because a number that looks like an
+improvement is the one that most needs auditing.
+
 ## Degenerate training features
 
 Ridge is scale-sensitive, so `GameModel`'s ridge pipeline standardizes `FEATURE_COLS`
@@ -118,5 +140,30 @@ guarded against now:
   calibration corpus `scripts/slate.py` builds).
 
 Both guards only ever change behavior for a feature below their respective threshold;
-neither alters a healthy multi-season fold, which is why Task 9's backtest numbers are
-unchanged by either.
+neither alters a healthy multi-season fold, which is why the regression baseline above is
+unchanged by either. A skipped fold emits a `RuntimeWarning` naming the season and the
+offending feature — a fold vanishing silently would shrink the corpus with no signal.
+
+## Failed joins vs. missing data
+
+`build_game_features` joins ratings and NGS onto each game with left merges, so a key that
+doesn't match yields nulls rather than an error, and the closing `fillna(0.0)` then makes
+those nulls indistinguishable from real zeros. That is how a team-code mismatch cost this
+project every Rams game's NGS features across all ten seasons before anyone noticed.
+
+Two things guard it now, and they are deliberately different:
+
+- **NGS features** are flagged, not fenced. A week-1 game genuinely has no prior NGS to
+  average, so it is zero-filled and `ngs_imputed_any` is set to 1 — the model can see that
+  the value is imputed. All 159 all-zero-NGS rows in the current dataset are week 1 and all
+  159 carry the flag.
+- **Rating features** carry no such flag, so a missed join there would be invisible.
+  `_check_rating_joins` raises `MissingRatingJoinError` before the fill if a game has null
+  rating features *in a week where other teams were rated*. That condition is what makes it
+  safe to raise: a week with nobody rated is legitimate (week 1 has no strictly-prior games
+  to rate from) and is ignored, while a week where the join worked for everyone else can
+  only mean this game's key failed.
+
+The upstream cause is that the three feeds spell relocated franchises differently;
+`data/teams.py` normalizes them at ingestion and raises on any code it doesn't recognize.
+See its module docstring for the three disagreements and what each one cost.
