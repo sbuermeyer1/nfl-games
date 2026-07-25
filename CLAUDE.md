@@ -53,6 +53,16 @@ reverse dependencies.
   dummies, which is what separates team quality from schedule quality. **Both `off_rating`
   and `def_rating` are oriented so higher is better** — the raw defensive coefficient is
   negated. Every consumer depends on that.
+- `data/teams.py` — canonical team abbreviations, applied by every loader in
+  `data/nfl.py` at ingestion. The three feeds disagree about relocated franchises:
+  schedules keep the code in use that season (`OAK`, `SD`, `STL`), play-by-play uses the
+  modern code for every season, and NGS spells the Rams `LAR` where schedules and pbp both
+  say `LA`. Because every downstream join is a left merge ending in `features.py`'s blanket
+  `fillna(0.0)`, a mismatch produced a silently zero-filled feature and never an error —
+  which is how the `LA`/`LAR` case survived unnoticed across every Rams game in all ten
+  seasons, 85 of them inside the backtest window. `normalize_team_codes` raises on an
+  unrecognised code rather than passing it through, so a future feed change fails loudly
+  instead of silently zeroing features. Normalise at ingestion; do not add per-join fixups.
 - `ratings/build.py` — as-of ratings. Every function takes an `(asof_season, asof_week)`
   cutoff and uses strictly prior data. This is the project's central correctness property
   and is tested directly.
