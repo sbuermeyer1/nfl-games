@@ -123,3 +123,39 @@ def test_ridge_recovers_signal_carried_by_a_small_scale_feature():
     pred = GameModel(estimator="ridge", alpha=10.0).fit(train).predict(train)
     mae = np.abs(pred["model_margin"] - train["margin"]).mean()
     assert mae < 1.0
+
+
+def test_near_constant_feature_with_near_zero_mean_does_not_explode_predictions():
+    """A feature that is constant to floating-point noise must not blow up predictions.
+
+    This mirrors ryoe_diff in an early season: NGS rushing data is too sparse, so
+    nearly every row gets the same imputed value and the feature's variance within the
+    training slice is on the order of 1e-34 around a mean near zero. sklearn's own
+    constant-feature detection (``_is_constant_feature``) is relative to the feature's
+    mean, so a near-zero-mean feature like this slips through with ``scale_`` on the
+    order of 1e-17 instead of being floored to 1.0. Standardizing a future value that
+    differs even slightly from the training mean then divides by that near-zero scale
+    and explodes -- predictions should stay in a sane range regardless.
+    """
+    rng = np.random.default_rng(0)
+    n = 256
+    train = pd.DataFrame({c: rng.normal(size=n) for c in FEATURE_COLS})
+    train["game_id"] = [f"g{i}" for i in range(n)]
+    # Near-constant feature: mean near zero, variance on the order of float64 noise.
+    train["ryoe_diff"] = 1e-17 * rng.normal(size=n)
+    train["margin"] = (
+        3.0 * train["net_rating_diff"] + 1.5 * train["rest_diff"] + rng.normal(scale=0.5, size=n)
+    )
+    train["total_points"] = 44.0 + 2.0 * train["off_pass_edge_home"] + rng.normal(scale=0.5, size=n)
+
+    test = pd.DataFrame({c: rng.normal(size=10) for c in FEATURE_COLS})
+    test["game_id"] = [f"t{i}" for i in range(10)]
+    # A later slate where the feature actually varies, unlike the near-constant
+    # training slice -- this is what dividing by ~1e-17 turns into an explosion.
+    test["ryoe_diff"] = rng.normal(size=10)
+
+    m = GameModel(estimator="ridge", alpha=1.0).fit(train)
+    pred = m.predict(test)
+
+    assert pred["model_margin"].abs().max() < 1000
+    assert pred["model_total"].abs().max() < 1000

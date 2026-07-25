@@ -23,8 +23,15 @@ def main() -> None:
     feats = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
 
     # Calibrate on out-of-sample predictions from every completed prior season.
+    # Skip the earliest two prior seasons as calibration *test* folds: the first has
+    # no training data at all (walk_forward would drop it anyway), and the second
+    # would be trained on that single earliest season alone. A model trained on one
+    # season is the degenerate, thin-data case that surfaced the scaling bug fixed in
+    # nfl_game.model.predict (an effectively-constant feature exploding predictions);
+    # the fix there makes any single fold safe now, but there is no reason to feed the
+    # calibrator noisy one-season-trained predictions when 2+ seasons are available.
     prior_seasons = sorted(s for s in feats["season"].unique() if s < args.season)
-    oos = walk_forward(feats, prior_seasons[1:], estimator=args.estimator, alpha=args.alpha)
+    oos = walk_forward(feats, prior_seasons[2:], estimator=args.estimator, alpha=args.alpha)
     calibrator = Calibrator().fit(oos)
 
     train = feats[feats["season"] < args.season]
