@@ -68,10 +68,18 @@ def test_opponent_adjustment_beats_raw_average():
     for i in range(3):
         extra.append(
             {
-                "game_id": f"x{i}", "season": 2024, "week": 20 + i, "team": "C",
-                "opponent": "A", "is_home": 0, "epa_play": -0.10 + 0.20,
-                "epa_pass": 0.10, "epa_rush": 0.10, "success_rate": 0.45,
-                "n_pass": 30, "n_rush": 25,
+                "game_id": f"x{i}",
+                "season": 2024,
+                "week": 20 + i,
+                "team": "C",
+                "opponent": "A",
+                "is_home": 0,
+                "epa_play": -0.10 + 0.20,
+                "epa_pass": 0.10,
+                "epa_rush": 0.10,
+                "success_rate": 0.45,
+                "n_pass": 30,
+                "n_rush": 25,
             }
         )
     df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)

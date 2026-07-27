@@ -1,5 +1,5 @@
-import pytest
 import pandas as pd
+import pytest
 
 from nfl_game.ratings import epa
 
@@ -66,9 +66,9 @@ def test_pass_rush_split_uses_indicator_columns():
     buf = out[out["team"] == "BUF"].iloc[0]
     assert buf["n_pass"] == 3
     assert buf["n_rush"] == 1
-    assert buf["epa_pass"] == pytest.approx(0.6)       # (1.0 + 0.0 + 0.8) / 3
+    assert buf["epa_pass"] == pytest.approx(0.6)  # (1.0 + 0.0 + 0.8) / 3
     assert buf["epa_rush"] == -0.6
-    assert buf["epa_play"] == pytest.approx(0.3)       # (1.0 + 0.0 + 0.8 - 0.6) / 4
+    assert buf["epa_play"] == pytest.approx(0.3)  # (1.0 + 0.0 + 0.8 - 0.6) / 4
 
 
 def test_opponent_and_home_flag():
