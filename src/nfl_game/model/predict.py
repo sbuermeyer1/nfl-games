@@ -5,6 +5,8 @@ picks between them on evidence. Everything downstream consumes GameModel and nev
 needs to know which one is in use.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
@@ -95,6 +97,8 @@ def _degenerate_features(df: pd.DataFrame) -> list[str]:
     return bad
 
 
+DEFAULT_ALPHA = 1.0
+
 ESTIMATORS = {
     # Ridge penalises raw coefficient size, so it is only meaningful on standardised
     # inputs. FEATURE_COLS mixes 0/1 flags, EPA rating diffs near 0.1, and temperatures
@@ -102,18 +106,37 @@ ESTIMATORS = {
     # the signal and barely touch temperature. Standardising also keeps the ridge-vs-gbm
     # comparison honest, since trees are scale-invariant either way.
     "ridge": lambda alpha: make_pipeline(RobustStandardScaler(), Ridge(alpha=alpha)),
+    # gbm takes alpha only to keep the factory signature uniform, and discards it. See
+    # ALPHA_IS_RIDGE_ONLY below for why it is not wired to l2_regularization instead.
     "gbm": lambda alpha: HistGradientBoostingRegressor(
         max_depth=3, learning_rate=0.05, max_iter=300, random_state=0
     ),
 }
 
+# Estimators for which `alpha` does nothing. --alpha is a documented CLI flag on both
+# scripts/backtest.py and scripts/slate.py, so a user can reasonably expect to tune it
+# under --estimator gbm; silently discarding it lets them believe they swept a
+# hyperparameter when every run was identical. It is deliberately NOT mapped onto
+# HistGradientBoostingRegressor's l2_regularization: that is a different penalty on a
+# different quantity (leaf values, not coefficients), and adopting it would move gbm's
+# default off l2_regularization=0.0 and invalidate the recorded ridge-vs-gbm comparison
+# that made ridge the default. Warning is honest; a silent remap would not be.
+ALPHA_IS_RIDGE_ONLY = frozenset({"gbm"})
+
 
 class GameModel:
     """Fits one regressor for game margin and one for total points."""
 
-    def __init__(self, estimator: str = "ridge", alpha: float = 1.0):
+    def __init__(self, estimator: str = "ridge", alpha: float = DEFAULT_ALPHA):
         if estimator not in ESTIMATORS:
             raise ValueError(f"estimator must be one of {sorted(ESTIMATORS)}, got {estimator!r}")
+        if estimator in ALPHA_IS_RIDGE_ONLY and alpha != DEFAULT_ALPHA:
+            warnings.warn(
+                f"estimator {estimator!r} ignores alpha; alpha={alpha} will have no effect "
+                f"on this fit. alpha applies to 'ridge' only.",
+                UserWarning,
+                stacklevel=2,
+            )
         self.estimator = estimator
         self.alpha = alpha
         self._margin = None
@@ -147,8 +170,25 @@ class GameModel:
         return self
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Model margin and total for each row, keyed by game_id.
+
+        Validates the input schema here and only here. Every caller in the project
+        (walk_forward, slate.py) reaches the model through this one method, so a single
+        check covers all of them; repeating it in each module would be five places to
+        keep in step with FEATURE_COLS. Without it a frame missing a feature raises
+        pandas' KeyError from inside the .to_numpy call, which names the columns but
+        gives no hint that the caller built the wrong frame.
+        """
         if self._margin is None or self._total is None:
             raise RuntimeError("call fit() before predict()")
+        required = ["game_id", *FEATURE_COLS]
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"predict() input is missing required column(s) {missing}. Expected "
+                f"game_id plus every FEATURE_COLS entry; build the frame with "
+                "build_game_features()."
+            )
         X = df[FEATURE_COLS].to_numpy(dtype=float)
         return pd.DataFrame(
             {

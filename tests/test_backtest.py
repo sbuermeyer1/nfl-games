@@ -56,6 +56,28 @@ def test_walk_forward_never_trains_on_the_test_season():
     np.testing.assert_allclose(merged["model_total"], merged["model_total_expected"])
 
 
+def test_walk_forward_forwards_the_estimator_choice():
+    """`--estimator gbm` produced a reported backtest number, yet dropping
+    `estimator=estimator` from walk_forward's GameModel call survived the whole suite:
+    every other test uses the default, so a walk_forward hard-wired to ridge looks
+    identical. Pinned the same way as the no-leak test -- exact prediction equality
+    against an explicitly-scoped reference model, since ridge and gbm predictions on the
+    same slice are nowhere near each other."""
+    feats = _features()
+    test_season = 2023
+
+    out = walk_forward(feats, test_seasons=[test_season], estimator="gbm")
+
+    train = feats[feats["season"] < test_season]
+    test = feats[feats["season"] == test_season]
+    expected = GameModel(estimator="gbm").fit(train).predict(test)
+
+    merged = out.merge(expected, on="game_id", suffixes=("", "_expected"), validate="one_to_one")
+    assert len(merged) == len(test)
+    np.testing.assert_allclose(merged["model_margin"], merged["model_margin_expected"])
+    np.testing.assert_allclose(merged["model_total"], merged["model_total_expected"])
+
+
 def test_walk_forward_skips_season_with_no_prior_data():
     out = walk_forward(_features(), test_seasons=[2021, 2022])
     assert sorted(out["season"].unique()) == [2022]
@@ -165,6 +187,32 @@ def test_evaluate_excludes_pushes_from_ats():
     m = evaluate(preds)
     # game "a" is an exact push against the spread and must not be counted
     assert m["ats_n"] == 1
+
+
+def test_evaluate_excludes_pushes_from_ou():
+    """The mirror of the ATS push test. The ATS side was pinned and the O/U side was
+    not, so deleting `total_points != total_line` survived -- the same one-side-pinned
+    asymmetry this suite has hit repeatedly. A total landing exactly on the line is
+    returned by the book, not graded, so counting it as a hit or a miss is wrong in
+    either direction."""
+    preds = pd.DataFrame(
+        {
+            "game_id": ["a", "b"],
+            "season": [2023, 2023],
+            "week": [1, 1],
+            "margin": [0.0, 0.0],
+            "total_points": [44.0, 50.0],
+            "model_margin": [0.0, 0.0],
+            "model_total": [45.0, 45.0],
+            "spread_line": [10.0, 10.0],
+            "total_line": [44.0, 44.0],
+        }
+    )
+    m = evaluate(preds)
+    # game "a" lands exactly on the total and must not be counted; only "b" is graded,
+    # where the model picked the over (45 > 44) and the game went over (50 > 44).
+    assert m["ou_n"] == 1
+    assert m["ou_hit_rate"] == 1.0
 
 
 def test_evaluate_ats_hit_rate_pins_sign_convention():
@@ -307,6 +355,59 @@ def test_ats_by_threshold_buckets_by_edge_size():
     assert row0["hit_rate"] == pytest.approx(0.5)
     assert row5["n"] == 2
     assert row5["hit_rate"] == pytest.approx(0.5)
+
+
+def test_ats_by_threshold_boundary_is_inclusive():
+    """min_edge means "at least this much edge", so a game whose edge lands exactly on
+    the threshold belongs in the bucket. Every existing threshold missed every edge by
+    a margin, so `>= t` -> `> t` changed no reported number and survived. The published
+    report's default thresholds are whole numbers and real edges land on them often, so
+    this boundary decides which games back a printed hit rate."""
+    preds = pd.DataFrame(
+        {
+            "game_id": ["a", "b", "c", "d"],
+            "season": [2023, 2023, 2023, 2023],
+            "week": [1, 1, 1, 1],
+            "margin": [10.0, 1.0, 10.0, 1.0],
+            "total_points": [44.0, 44.0, 44.0, 44.0],
+            "model_margin": [4.0, 4.0, 9.0, 9.0],
+            "model_total": [44.0, 44.0, 44.0, 44.0],
+            "spread_line": [3.0, 3.0, 3.0, 3.0],
+            "total_line": [44.0, 44.0, 44.0, 44.0],
+        }
+    )
+    # edges are exactly 1 (a, b) and exactly 6 (c, d), so both thresholds sit ON a real
+    # edge: with `>=`, threshold 1 keeps all four and threshold 6 keeps c and d. With
+    # `>` they would drop to 2 and 0 respectively.
+    out = ats_by_threshold(preds, thresholds=(1, 6)).set_index("min_edge")
+    assert out.loc[1, "n"] == 4
+    assert out.loc[6, "n"] == 2
+
+
+def test_ats_by_threshold_excludes_pushes():
+    """ats_by_threshold does its own push filtering rather than reusing evaluate's, so
+    it needs its own test -- deleting the filter here survived the ATS push test, which
+    only covers evaluate. Same grading rule: a game landing exactly on the spread is
+    returned, not won or lost."""
+    preds = pd.DataFrame(
+        {
+            "game_id": ["a", "b"],
+            "season": [2023, 2023],
+            "week": [1, 1],
+            "margin": [3.0, 10.0],
+            "total_points": [44.0, 44.0],
+            "model_margin": [9.0, 9.0],
+            "model_total": [44.0, 44.0],
+            "spread_line": [3.0, 3.0],
+            "total_line": [44.0, 44.0],
+        }
+    )
+    # Both games carry edge |9-3| = 6, so both are in every bucket on edge alone; "a"
+    # is excluded only by the push filter. Keeping it would count it as a miss (the
+    # model picks home, and margin 3 does not exceed the line), turning 1/1 into 1/2.
+    out = ats_by_threshold(preds, thresholds=(0,)).iloc[0]
+    assert out["n"] == 1
+    assert out["hit_rate"] == pytest.approx(1.0)
 
 
 def test_market_regression_returns_both_coefficients():

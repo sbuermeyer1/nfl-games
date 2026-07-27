@@ -3,7 +3,12 @@ import pandas as pd
 import pytest
 
 from nfl_game.model.features import FEATURE_COLS
-from nfl_game.model.predict import ESTIMATORS, DegenerateFeatureError, GameModel
+from nfl_game.model.predict import (
+    DEFAULT_ALPHA,
+    ESTIMATORS,
+    DegenerateFeatureError,
+    GameModel,
+)
 
 
 def _train(n=300, seed=0):
@@ -50,6 +55,69 @@ def test_gbm_estimator_also_fits():
 def test_rejects_unknown_estimator():
     with pytest.raises(ValueError, match="estimator"):
         GameModel(estimator="magic")
+
+
+def test_gbm_warns_that_it_ignores_a_non_default_alpha():
+    """--alpha is a documented CLI flag on both scripts, but the gbm factory discards
+    it. Silently doing nothing lets a user believe they swept a hyperparameter when
+    every run was byte-identical, so the no-op has to be said out loud."""
+    with pytest.warns(UserWarning, match="ignores alpha"):
+        GameModel(estimator="gbm", alpha=5.0)
+
+
+def test_alpha_warning_does_not_fire_for_ridge(recwarn):
+    """The converse, guarding the estimator half of the condition: ridge genuinely uses
+    alpha, so warning there would be wrong and would train users to ignore the warning.
+    """
+    GameModel(estimator="ridge", alpha=5.0)
+    assert [w for w in recwarn.list if issubclass(w.category, UserWarning)] == []
+
+
+def test_alpha_warning_does_not_fire_for_gbm_at_the_default(recwarn):
+    """The other half of the condition: every caller passes alpha unconditionally
+    (argparse supplies its default), so warning whenever gbm sees an alpha at all would
+    fire on every plain `--estimator gbm` run. Only a value the user actually chose --
+    one differing from the default -- represents a knob they think they turned."""
+    GameModel(estimator="gbm", alpha=DEFAULT_ALPHA)
+    assert [w for w in recwarn.list if issubclass(w.category, UserWarning)] == []
+
+
+def test_predict_names_every_missing_column():
+    """A malformed frame must fail with a message that says what is wrong and where to
+    get a right one, not pandas' bare KeyError from inside .to_numpy -- and it must name
+    every missing column, since fixing them one error at a time is the slow way to find
+    out you built the wrong frame.
+
+    Neither column named here appears in the message's static prose, so these assertions
+    can only be satisfied by the reported list. An earlier version dropped game_id and
+    checked for it in the message, which passed even with game_id removed from the
+    check: the guidance sentence mentions game_id by name."""
+    m = GameModel().fit(_train())
+    bad = _train(n=5, seed=1).drop(columns=["rest_diff", "div_game"])
+
+    with pytest.raises(ValueError, match="missing required column") as exc:
+        m.predict(bad)
+    assert "rest_diff" in str(exc.value)
+    assert "div_game" in str(exc.value)
+
+
+def test_predict_requires_game_id_and_not_only_the_feature_columns():
+    """game_id is read separately from FEATURE_COLS, a line below the .to_numpy call, so
+    a check covering only the features lets the frame through to a second and much more
+    opaque KeyError -- exactly the failure this check exists to replace."""
+    m = GameModel().fit(_train())
+    bad = _train(n=5, seed=1).drop(columns=["game_id"])
+
+    with pytest.raises(ValueError, match="missing required column"):
+        m.predict(bad)
+
+
+def test_predict_schema_check_runs_after_the_fit_check():
+    """An unfitted model given a malformed frame must still report the unfitted state:
+    that is the caller's actual mistake, and a schema complaint would send them off
+    fixing the wrong thing."""
+    with pytest.raises(RuntimeError, match="fit"):
+        GameModel().predict(_train(n=3).drop(columns=["game_id"]))
 
 
 def test_rows_with_null_targets_are_dropped_at_fit():
