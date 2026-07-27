@@ -7,6 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 All four layers are implemented: `data/`, `ratings/`, `model/`, `market/`. Check contents
 before assuming any extension exists.
 
+**This file is authoritative for how the project works.** `docs/development-log.md` is the
+verbatim working ledger from the build, preserved for the reasoning behind each decision —
+it is a historical record, append-only and chronological, and some of its claims were
+falsified by the very reviews it describes. Treat it as evidence, never as authority, and
+prefer this file wherever the two disagree. Per-task briefs and reports are archived in
+`docs/sdd-archive/`.
+
 ## Commands
 
     .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
