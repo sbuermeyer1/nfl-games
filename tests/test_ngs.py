@@ -22,7 +22,10 @@ def _passing():
 def _rushing():
     return pd.DataFrame(
         {
-            "season": [2024], "week": [1], "season_type": ["REG"], "team_abbr": ["BUF"],
+            "season": [2024],
+            "week": [1],
+            "season_type": ["REG"],
+            "team_abbr": ["BUF"],
             "rush_attempts": [25],
             "rush_yards_over_expected_per_att": [0.8],
             "percent_attempts_gte_eight_defenders": [22.0],
@@ -33,8 +36,11 @@ def _rushing():
 def _receiving():
     return pd.DataFrame(
         {
-            "season": [2024, 2024], "week": [1, 1], "season_type": ["REG"] * 2,
-            "team_abbr": ["BUF", "KC"], "targets": [20, 30],
+            "season": [2024, 2024],
+            "week": [1, 1],
+            "season_type": ["REG"] * 2,
+            "team_abbr": ["BUF", "KC"],
+            "targets": [20, 30],
             "avg_separation": [3.0, 2.5],
             "avg_yac_above_expectation": [0.5, -0.2],
         }

@@ -87,6 +87,12 @@ def normalize_team_codes(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     Raises ValueError on a code that is neither canonical nor a known alias: an
     unrecognised spelling means the upstream feed changed, and passing it through is
     exactly how the LA/LAR mismatch went unnoticed for the life of this project.
+
+    Note that a rewritten column comes back as plain `object` dtype even if it arrived
+    as StringDtype or Categorical, because the rewrite goes through `.map`. That is
+    harmless on the path this project uses -- the frames are written to parquet, which
+    stores the values as strings either way, and every downstream use is an equality
+    join or a groupby key. It would matter to a caller relying on categorical codes.
     """
     out = df.copy()
     for col in columns:

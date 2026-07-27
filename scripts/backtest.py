@@ -5,6 +5,7 @@ import argparse
 import pandas as pd
 
 from nfl_game.backtest import ats_by_threshold, evaluate, market_comparison_regression, walk_forward
+from nfl_game.model.predict import DEFAULT_ALPHA
 from nfl_game.paths import PROCESSED_DIR
 
 
@@ -12,7 +13,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--test-seasons", default="2021-2025")
     ap.add_argument("--estimator", default="ridge", choices=["ridge", "gbm"])
-    ap.add_argument("--alpha", type=float, default=1.0)
+    ap.add_argument(
+        "--alpha",
+        type=float,
+        default=DEFAULT_ALPHA,
+        help="ridge penalty strength; ignored by --estimator gbm, which warns if you set it",
+    )
     args = ap.parse_args()
 
     lo, _, hi = args.test_seasons.partition("-")

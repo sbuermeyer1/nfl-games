@@ -13,12 +13,18 @@ def _games():
                 gid += 1
                 rows.append(
                     {
-                        "game_id": f"g{gid}", "season": season, "week": week,
-                        "team": team, "opponent": opp, "is_home": 1,
+                        "game_id": f"g{gid}",
+                        "season": season,
+                        "week": week,
+                        "team": team,
+                        "opponent": opp,
+                        "is_home": 1,
                         "epa_play": 0.1 if team in ("A", "C") else -0.1,
                         "epa_pass": 0.1 if team in ("A", "C") else -0.1,
                         "epa_rush": 0.05 if team in ("A", "C") else -0.05,
-                        "success_rate": 0.45, "n_pass": 30, "n_rush": 25,
+                        "success_rate": 0.45,
+                        "n_pass": 30,
+                        "n_rush": 25,
                     }
                 )
     return pd.DataFrame(rows)
@@ -52,9 +58,13 @@ def test_prior_season_downweighted_by_penalty():
 def test_build_ratings_returns_all_rating_columns():
     out = build_ratings(_games(), asof_season=2024, asof_week=5)
     expected = {
-        "team", "off_rating", "def_rating",
-        "off_rating_pass", "def_rating_pass",
-        "off_rating_rush", "def_rating_rush",
+        "team",
+        "off_rating",
+        "def_rating",
+        "off_rating_pass",
+        "def_rating_pass",
+        "off_rating_rush",
+        "def_rating_rush",
     }
     assert set(out.columns) == expected
     assert sorted(out["team"]) == ["A", "B", "C", "D"]
@@ -63,6 +73,43 @@ def test_build_ratings_returns_all_rating_columns():
 def test_build_ratings_orders_teams_correctly():
     out = build_ratings(_games(), asof_season=2024, asof_week=5).set_index("team")
     assert out.loc["A", "off_rating"] > out.loc["B", "off_rating"]
+
+
+def test_build_ratings_drops_future_rows_rather_than_zero_weighting_them():
+    """The leak guard is doubled -- decay_weights zeroes future games AND build_ratings
+    drops them -- and only the weighting half was pinned: keeping every row with its
+    zero weight survived the whole suite, because the ridge fit ignores zero-weight rows
+    anyway. It is not equivalent, though. fit_ratings derives its team list from the
+    rows it is handed, so a zero-weighted future row still puts its teams in the output
+    with a rating fitted from no data at all -- a team that has not played yet quietly
+    acquiring a number. Every team in the shared fixture plays every week, which is why
+    the difference was invisible; teams E and F exist only at and after the cutoff."""
+    df = _games()
+    future_only = pd.DataFrame(
+        [
+            {
+                "game_id": "gE1",
+                "season": 2024,
+                "week": week,
+                "team": team,
+                "opponent": opp,
+                "is_home": 1,
+                "epa_play": 0.2,
+                "epa_pass": 0.2,
+                "epa_rush": 0.1,
+                "success_rate": 0.5,
+                "n_pass": 30,
+                "n_rush": 25,
+            }
+            for week in (3, 4)
+            for team, opp in (("E", "F"), ("F", "E"))
+        ]
+    )
+    out = build_ratings(
+        pd.concat([df, future_only], ignore_index=True), asof_season=2024, asof_week=3
+    )
+
+    assert sorted(out["team"]) == ["A", "B", "C", "D"]
 
 
 def test_build_ratings_raises_when_no_prior_data():
