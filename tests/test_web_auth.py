@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from nfl_game.web.auth import AccessCodeMiddleware
+from nfl_game.web.auth import AccessCodeMiddleware, read_cookie
+from nfl_game.web.login import add_login_routes
 from nfl_game.web.session import COOKIE_NAME, SessionStore
 
 
@@ -84,4 +85,28 @@ def test_disabled_middleware_allows_local_requests():
     client, _ = unprotected_client()
 
     assert client.get("/").status_code == 200
+    assert client.get("/api/options").status_code == 200
+
+
+def test_read_cookie_joins_duplicate_asgi_cookie_headers():
+    """Catch an earlier session cookie being discarded by duplicate headers."""
+    scope = {
+        "headers": [
+            (b"cookie", b"nfl_session=valid-token"),
+            (b"cookie", b"theme=dark"),
+        ]
+    }
+
+    assert read_cookie(scope, COOKIE_NAME) == "valid-token"
+
+
+def test_login_issued_cookie_passes_through_middleware():
+    """Catch a secure login cookie that the access-code gate cannot consume."""
+    app = _app()
+    store = SessionStore()
+    add_login_routes(app, store, "letmein")
+    app.add_middleware(AccessCodeMiddleware, store=store, enabled=True)
+    client = TestClient(app, base_url="https://testserver", follow_redirects=False)
+
+    assert client.post("/login", json={"code": "letmein"}).status_code == 200
     assert client.get("/api/options").status_code == 200

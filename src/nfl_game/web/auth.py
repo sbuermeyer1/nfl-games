@@ -7,9 +7,10 @@ PUBLIC_PATHS = {LOGIN_PATH, "/health"}
 
 
 def read_cookie(scope, name: str) -> str | None:
-    """Read one unescaped cookie value from an ASGI HTTP scope."""
-    headers = dict(scope.get("headers") or [])
-    raw = headers.get(b"cookie", b"").decode("latin-1")
+    """Read one unescaped cookie value from all ASGI Cookie header fields."""
+    raw = b"; ".join(
+        value for header, value in scope.get("headers") or [] if header == b"cookie"
+    ).decode("latin-1")
     for part in raw.split(";"):
         key, separator, value = part.strip().partition("=")
         if separator and key == name:

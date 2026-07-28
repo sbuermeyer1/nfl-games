@@ -3,6 +3,7 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from threading import RLock
 
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 60
@@ -37,8 +38,38 @@ class LoginThrottle:
         self._lockout = lockout
         self._clock = clock
         self._max_tracked = max_tracked
+        self._lock = RLock()
+
+    def retry_after(self, ip: str) -> int:
+        """Return seconds until ``ip`` may try again, or zero when unlocked."""
+        with self._lock:
+            self._clear_expired(ip)
+            record = self._records.get(ip)
+            if record is None or record.locked_until == 0.0:
+                return 0
+            return int(record.locked_until - self._clock()) + 1
+
+    def record_failure(self, ip: str) -> None:
+        with self._lock:
+            self._clear_expired(ip)
+            record = self._records.setdefault(
+                ip, _Record(failures=0, locked_until=0.0, last_seen=self._clock())
+            )
+            record.failures += 1
+            record.last_seen = self._clock()
+            if record.failures >= self._max:
+                record.locked_until = self._clock() + self._lockout
+            if len(self._records) > self._max_tracked:
+                self._evict_stale_lockouts()
+                if len(self._records) > self._max_tracked:
+                    self._evict_oldest()
+
+    def record_success(self, ip: str) -> None:
+        with self._lock:
+            self._records.pop(ip, None)
 
     def _clear_expired(self, ip: str) -> None:
+        """Clear an elapsed lockout; caller must hold ``_lock``."""
         record = self._records.get(ip)
         if (
             record is not None
@@ -47,32 +78,8 @@ class LoginThrottle:
         ):
             del self._records[ip]
 
-    def retry_after(self, ip: str) -> int:
-        """Return seconds until ``ip`` may try again, or zero when unlocked."""
-        self._clear_expired(ip)
-        record = self._records.get(ip)
-        if record is None or record.locked_until == 0.0:
-            return 0
-        return int(record.locked_until - self._clock()) + 1
-
-    def record_failure(self, ip: str) -> None:
-        self._clear_expired(ip)
-        record = self._records.setdefault(
-            ip, _Record(failures=0, locked_until=0.0, last_seen=self._clock())
-        )
-        record.failures += 1
-        record.last_seen = self._clock()
-        if record.failures >= self._max:
-            record.locked_until = self._clock() + self._lockout
-        if len(self._records) > self._max_tracked:
-            self._evict_stale_lockouts()
-            if len(self._records) > self._max_tracked:
-                self._evict_oldest()
-
-    def record_success(self, ip: str) -> None:
-        self._records.pop(ip, None)
-
     def _evict_stale_lockouts(self) -> None:
+        """Drop elapsed lockouts; caller must hold ``_lock``."""
         now = self._clock()
         stale = [
             ip
@@ -83,6 +90,7 @@ class LoginThrottle:
             del self._records[ip]
 
     def _evict_oldest(self) -> None:
+        """Bound tracking while preserving active locks; caller must hold ``_lock``."""
         now = self._clock()
         unlocked = {
             ip: record

@@ -55,3 +55,24 @@ def test_empty_configured_code_never_authenticates():
 
     assert client.post("/login", json={"code": ""}).status_code == 401
     assert len(store) == 0
+
+
+class Clock:
+    now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_lockout_response_exposes_exact_retry_after_value():
+    """Catch a rate-limit response whose header disagrees with its lockout."""
+    clock = Clock()
+    throttle = LoginThrottle(max_failures=1, lockout=60, clock=clock)
+    client, _ = login_client("letmein", throttle)
+
+    assert client.post("/login", json={"code": "wrong"}).status_code == 401
+    response = client.post("/login", json={"code": "wrong"})
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "61"
+    assert response.json() == {"error": "Too many attempts. Try again in 61s."}
