@@ -1,10 +1,18 @@
+import csv
+import io
 import math
 
 import pandas as pd
 import pytest
 
 from nfl_game.model.features import FEATURE_COLS
-from nfl_game.web.service import SlateInputError, SlateService
+from nfl_game.model.predict import DEFAULT_ALPHA
+from nfl_game.web.service import (
+    SlateInputError,
+    SlateNotFoundError,
+    SlateService,
+    SlateUnavailableError,
+)
 
 
 def feature_rows() -> pd.DataFrame:
@@ -45,9 +53,38 @@ def test_threshold_must_be_finite_and_non_negative(threshold):
         SlateService(feature_rows()).slate(2025, 1, "ridge", threshold)
 
 
+@pytest.mark.parametrize("threshold", [None, "2", True])
+def test_threshold_must_be_a_non_boolean_number(threshold):
+    with pytest.raises(SlateInputError, match="edge threshold"):
+        SlateService(feature_rows()).slate(2025, 1, "ridge", threshold)
+
+
 def test_season_week_pair_must_exist():
     with pytest.raises(SlateInputError, match="week 2 is not available for season 2025"):
         SlateService(feature_rows()).slate(2025, 2, "ridge", 2.0)
+
+
+def test_rejects_a_dataset_missing_required_columns():
+    with pytest.raises(ValueError, match="game features missing required columns"):
+        SlateService(feature_rows().drop(columns="margin"))
+
+
+def test_rejects_an_empty_dataset_with_the_required_schema():
+    empty = feature_rows().iloc[0:0]
+    with pytest.raises(ValueError, match="game features dataset is empty"):
+        SlateService(empty)
+
+
+def test_rejects_duplicate_game_ids():
+    rows = feature_rows()
+    duplicate = pd.concat([rows, rows.iloc[[0]]], ignore_index=True)
+    with pytest.raises(ValueError, match="duplicate game_id"):
+        SlateService(duplicate)
+
+
+def test_requires_prior_season_data_to_build_a_bundle():
+    with pytest.raises(SlateUnavailableError, match="no calibration data is available"):
+        SlateService(feature_rows()).slate(2024, 1, "ridge", 2.0)
 
 
 def fake_fitted_service(monkeypatch, spread_line=2.5, total_line=44.5):
@@ -183,8 +220,84 @@ def test_records_convert_nan_to_none(monkeypatch):
     assert row["cover_prob"] is None
 
 
-def test_csv_uses_same_rows_and_never_writes_nan(monkeypatch):
+def test_csv_uses_same_rows_and_blanks_missing_values(monkeypatch):
     service, _ = fake_fitted_service(monkeypatch, total_line=float("nan"))
+    records = service.records(2025, 1, "ridge", 2.0)
     csv_text = service.csv(2025, 1, "ridge", 2.0)
-    assert csv_text.startswith("game_id,season,week,away_team,home_team")
-    assert "nan" not in csv_text.lower()
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+
+    assert list(csv_rows[0]) == list(records[0])
+    assert csv_rows == [
+        {key: "" if value is None else str(value) for key, value in row.items()}
+        for row in records
+    ]
+    assert csv_rows[0]["market_total"] == ""
+    assert csv_rows[0]["total_gap"] == ""
+    assert csv_rows[0]["over_prob"] == ""
+
+
+def test_bundle_uses_prior_seasons_selected_estimator_and_default_alpha(monkeypatch):
+    service = SlateService(feature_rows())
+    calls = {"model_init": [], "walk_forward": []}
+
+    class FakeModel:
+        def __init__(self, estimator, alpha):
+            calls["model_init"].append((estimator, alpha))
+
+        def fit(self, train):
+            return self
+
+        def predict(self, target):
+            return pd.DataFrame(
+                {
+                    "game_id": target["game_id"].to_numpy(),
+                    "model_margin": [4.0] * len(target),
+                    "model_total": [46.0] * len(target),
+                }
+            )
+
+    class FakeCalibrator:
+        def fit(self, oos):
+            return self
+
+        def predict(self, merged):
+            return pd.DataFrame(
+                {
+                    "game_id": merged["game_id"].to_numpy(),
+                    "cover_prob": [0.6] * len(merged),
+                    "over_prob": [0.55] * len(merged),
+                }
+            )
+
+    def fake_walk_forward(features, seasons, estimator, alpha):
+        calls["walk_forward"].append((list(seasons), estimator, alpha))
+        return features.assign(model_margin=3.0, model_total=45.0)
+
+    monkeypatch.setattr("nfl_game.web.service.GameModel", FakeModel)
+    monkeypatch.setattr("nfl_game.web.service.Calibrator", FakeCalibrator)
+    monkeypatch.setattr("nfl_game.web.service.walk_forward", fake_walk_forward)
+
+    service.slate(2025, 1, "gbm", 2.0)
+
+    assert calls["walk_forward"] == [([2024], "gbm", DEFAULT_ALPHA)]
+    assert calls["model_init"] == [("gbm", DEFAULT_ALPHA)]
+
+
+def test_raises_not_found_when_a_valid_slate_has_no_model_rows(monkeypatch):
+    service = SlateService(feature_rows())
+
+    class EmptyModel:
+        def predict(self, target):
+            return pd.DataFrame(columns=["game_id", "model_margin", "model_total"])
+
+    class UnusedCalibrator:
+        def predict(self, merged):
+            return pd.DataFrame(columns=["game_id", "cover_prob", "over_prob"])
+
+    class EmptyBundle:
+        model = EmptyModel()
+        calibrator = UnusedCalibrator()
+
+    monkeypatch.setattr(service, "_bundle", lambda season, estimator: EmptyBundle())
+    with pytest.raises(SlateNotFoundError, match="no games are available"):
+        service.slate(2025, 1, "ridge", 2.0)

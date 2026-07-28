@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass
+from numbers import Real
 from pathlib import Path
 
 import pandas as pd
@@ -93,7 +94,12 @@ class SlateService:
             raise SlateInputError(
                 f"estimator must be one of {sorted(ESTIMATORS)}, got {estimator!r}"
             )
-        if not math.isfinite(edge_threshold) or edge_threshold < 0:
+        if (
+            isinstance(edge_threshold, bool)
+            or not isinstance(edge_threshold, Real)
+            or not math.isfinite(edge_threshold)
+            or edge_threshold < 0
+        ):
             raise SlateInputError("edge threshold must be a finite non-negative number")
         weeks = self.weeks(season)
         if week not in weeks:
