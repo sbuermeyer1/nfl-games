@@ -72,6 +72,8 @@
 - Consumes: `walk_forward(features_df, test_seasons, estimator, alpha)`, `GameModel(estimator, alpha)`, `Calibrator`, `build_slate`, `ESTIMATORS`, `DEFAULT_ALPHA`, `FEATURE_COLS`.
 - Produces: `SlateService.from_parquet(path)`, `SlateService.options()`, `SlateService.weeks(season)`, `SlateService.slate(season, week, estimator="ridge", edge_threshold=2.0)`, `SlateService.records(season, week, estimator="ridge", edge_threshold=2.0)`, `SlateService.csv(season, week, estimator="ridge", edge_threshold=2.0)`, `SlateInputError`, `SlateNotFoundError`, and `SlateUnavailableError`.
 
+**Execution amendment (owner-approved):** Steps 3–6 below contain a direct ordering conflict: the Step 1 validation tests call `slate`, Step 3 does not implement `slate`, and Step 6 later expects `slate`, `records`, and `csv` to be missing. For this task, add the complete behavioral test set before production code, retain the initial missing-module failure and the expanded-suite failure as red evidence, then implement the full service in one green phase. This is a test-order correction, not an exception from behavioral TDD.
+
 - [ ] **Step 1: Add web-test dependencies and write failing option/validation tests**
 
 Add these dependencies without changing existing version floors:
