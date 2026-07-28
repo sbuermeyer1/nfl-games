@@ -43,30 +43,57 @@ class LoginThrottle:
     def retry_after(self, ip: str) -> int:
         """Return seconds until ``ip`` may try again, or zero when unlocked."""
         with self._lock:
-            self._clear_expired(ip)
-            record = self._records.get(ip)
-            if record is None or record.locked_until == 0.0:
-                return 0
-            return int(record.locked_until - self._clock()) + 1
+            return self._retry_after(ip)
+
+    def check_and_record(self, ip: str, successful: bool) -> int:
+        """Atomically check lockout and record an allowed login outcome.
+
+        Returns a nonzero retry delay when an existing lockout rejects the
+        attempt. A threshold-reaching failure is recorded but still returns
+        zero, so its caller returns the normal incorrect-code response.
+        """
+        with self._lock:
+            wait = self._retry_after(ip)
+            if wait:
+                return wait
+            if successful:
+                self._records.pop(ip, None)
+            else:
+                self._record_failure(ip)
+            return 0
 
     def record_failure(self, ip: str) -> None:
+        """Record a failure; retained for callers that do not need a decision."""
         with self._lock:
-            self._clear_expired(ip)
-            record = self._records.setdefault(
-                ip, _Record(failures=0, locked_until=0.0, last_seen=self._clock())
-            )
-            record.failures += 1
-            record.last_seen = self._clock()
-            if record.failures >= self._max:
-                record.locked_until = self._clock() + self._lockout
-            if len(self._records) > self._max_tracked:
-                self._evict_stale_lockouts()
-                if len(self._records) > self._max_tracked:
-                    self._evict_oldest()
+            self._record_failure(ip)
 
     def record_success(self, ip: str) -> None:
+        """Clear prior failures; retained for callers that do not need a decision."""
         with self._lock:
             self._records.pop(ip, None)
+
+    def _retry_after(self, ip: str) -> int:
+        """Return the current retry delay; caller must hold ``_lock``."""
+        self._clear_expired(ip)
+        record = self._records.get(ip)
+        if record is None or record.locked_until == 0.0:
+            return 0
+        return int(record.locked_until - self._clock()) + 1
+
+    def _record_failure(self, ip: str) -> None:
+        """Record one failure and enforce bounds; caller must hold ``_lock``."""
+        self._clear_expired(ip)
+        record = self._records.setdefault(
+            ip, _Record(failures=0, locked_until=0.0, last_seen=self._clock())
+        )
+        record.failures += 1
+        record.last_seen = self._clock()
+        if record.failures >= self._max:
+            record.locked_until = self._clock() + self._lockout
+        if len(self._records) > self._max_tracked:
+            self._evict_stale_lockouts()
+            if len(self._records) > self._max_tracked:
+                self._evict_oldest()
 
     def _clear_expired(self, ip: str) -> None:
         """Clear an elapsed lockout; caller must hold ``_lock``."""

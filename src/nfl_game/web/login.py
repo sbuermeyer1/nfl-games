@@ -68,17 +68,18 @@ def add_login_routes(
     @app.post("/login")
     def login(req: LoginRequest, request: Request):
         ip = client_ip(request)
-        wait = throttle.retry_after(ip)
+        successful = bool(access_code) and hmac.compare_digest(
+            req.code.encode(), access_code.encode()
+        )
+        wait = throttle.check_and_record(ip, successful)
         if wait:
             return JSONResponse(
                 {"error": f"Too many attempts. Try again in {wait}s."},
                 status_code=429,
                 headers={"Retry-After": str(wait)},
             )
-        if not access_code or not hmac.compare_digest(req.code.encode(), access_code.encode()):
-            throttle.record_failure(ip)
+        if not successful:
             return JSONResponse({"error": "Incorrect code"}, status_code=401)
-        throttle.record_success(ip)
         response = JSONResponse({"ok": True})
         response.set_cookie(
             COOKIE_NAME,
