@@ -1,10 +1,9 @@
 import json
 import math
 import re
-import subprocess
-from pathlib import Path
 
 import pytest
+import quickjs
 from fastapi.testclient import TestClient
 
 from nfl_game.web.app import create_app
@@ -14,7 +13,6 @@ from nfl_game.web.service import (
     SlateUnavailableError,
 )
 
-NODE = "node"
 PAGE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 
 
@@ -97,26 +95,20 @@ def response(status=200, body=None):
 
 
 def dashboard_state(http_client, responses, actions):
-    """Run the returned dashboard script with DOM/fetch behavior supplied by Node."""
+    """Run the returned dashboard script with DOM/fetch behavior in QuickJS."""
     page = http_client.get("/").text
     script = PAGE_SCRIPT.search(page)
     assert script, "dashboard page must contain an executable script"
     payload = json.dumps({"script": script.group(1), "responses": responses, "actions": actions})
-    result = subprocess.run(
-        [NODE, "-e", DASHBOARD_HARNESS],
-        input=payload,
-        text=True,
-        capture_output=True,
-        check=False,
-        cwd=Path(__file__).parents[1],
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    context = quickjs.Context()
+    context.eval(f"const input = JSON.parse({json.dumps(payload)});")
+    context.eval(DASHBOARD_HARNESS)
+    while context.execute_pending_job():
+        pass
+    return json.loads(context.eval("globalThis.__state"))
 
 
 DASHBOARD_HARNESS = r"""
-const fs = require('fs');
-const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const listeners = {};
 const pending = {};
 const calls = [];
@@ -156,12 +148,21 @@ nodes.download.tagName = 'button';
 nodes.message.tagName = 'p';
 nodes.results.tagName = 'table';
 
-global.document = {
+globalThis.document = {
   getElementById: id => nodes[id],
   createElement: tagName => new Element(tagName),
   addEventListener: (name, callback) => { (listeners[name] ||= []).push(callback); },
 };
-global.window = { location: '' };
+globalThis.window = { location: '' };
+class URLSearchParams {
+  constructor(values) { this.values = values; }
+  toString() {
+    return Object.entries(this.values)
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value).replace(/%20/g, '+')}`)
+      .join('&');
+  }
+}
+globalThis.URLSearchParams = URLSearchParams;
 
 function makeResponse(spec) {
   return {
@@ -171,7 +172,7 @@ function makeResponse(spec) {
   };
 }
 
-global.fetch = url => {
+globalThis.fetch = url => {
   calls.push(url);
   const spec = input.responses[url];
   if (!spec) return Promise.reject(new Error(`Unexpected URL: ${url}`));
@@ -207,7 +208,7 @@ eval(input.script);
     cells: row.children.map(cell => cell.textContent),
   }));
   const options = id => nodes[id].children.map(option => ({ value: option.value, selected: option.selected }));
-  process.stdout.write(JSON.stringify({
+  globalThis.__state = JSON.stringify({
     calls,
     unhandled,
     location: window.location,
@@ -217,8 +218,8 @@ eval(input.script);
     week: { value: nodes.week.value, options: options('week') },
     estimator: { value: nodes.estimator.value, options: options('estimator') },
     edge: nodes.edge.value,
-  }));
-})().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });
+  });
+})().catch(error => { globalThis.__state = JSON.stringify({error: error.stack}); });
 """
 
 
