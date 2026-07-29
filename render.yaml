@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ashburn-nfl
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: ACCESS_CODE
+        sync: false

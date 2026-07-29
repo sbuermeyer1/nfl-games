@@ -16,3 +16,4 @@ data/processed/*
 
 # Isolated feature workspaces.
 .worktrees/
+!data/processed/game_features.parquet
