@@ -196,10 +196,10 @@ try {
 
 # Render CLI 2.7.1+; expected: Blueprint validation succeeds.
 render blueprints validate render.yaml
-+```
-+
-+Then create the Blueprint in Render from that same accepted integrated `master` commit,
-+provide the private `ACCESS_CODE` when prompted, and require a successful Render Docker
-+build before continuing to the external checks above. The Blueprint validation command
-+does not create or modify Render resources; deployment and DNS changes remain the
-+separate post-integration release task.
+```
+
+Then create the Blueprint in Render from that same accepted integrated `master` commit,
+provide the private `ACCESS_CODE` when prompted, and require a successful Render Docker
+build before continuing to the external checks above. The Blueprint validation command
+does not create or modify Render resources; deployment and DNS changes remain the
+separate post-integration release task.
