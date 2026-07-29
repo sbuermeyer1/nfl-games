@@ -1,3 +1,4 @@
+from nfl_game.web.app import create_app
 from nfl_game.web.service import (
     SlateInputError,
     SlateNotFoundError,
@@ -10,4 +11,5 @@ __all__ = [
     "SlateNotFoundError",
     "SlateService",
     "SlateUnavailableError",
+    "create_app",
 ]
