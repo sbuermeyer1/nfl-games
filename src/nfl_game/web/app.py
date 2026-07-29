@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import FastAPI, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from nfl_game.web.auth import AccessCodeMiddleware
@@ -62,6 +63,7 @@ const runButton = document.getElementById('run');
 const downloadButton = document.getElementById('download');
 const message = document.getElementById('message');
 const results = document.getElementById('results');
+let latestWeekRequest = 0;
 
 function replaceOptions(select, values, selected) {
   select.replaceChildren();
@@ -138,15 +140,23 @@ function renderGames(games) {
 }
 
 async function loadWeeks(runAfter = false) {
-  const body = await jsonOrError(`/api/weeks?season=${encodeURIComponent(season.value)}`);
-  const latest = body.weeks[body.weeks.length - 1];
-  replaceOptions(week, body.weeks, latest);
-  if (runAfter) await runSlate();
+  const request = ++latestWeekRequest;
+  try {
+    const body = await jsonOrError(`/api/weeks?season=${encodeURIComponent(season.value)}`);
+    if (request !== latestWeekRequest) return;
+    const latest = body.weeks[body.weeks.length - 1];
+    replaceOptions(week, body.weeks, latest);
+    if (runAfter) await runSlate();
+  } catch (error) {
+    if (request !== latestWeekRequest) return;
+    results.replaceChildren();
+    message.textContent = 'Unable to load weeks.';
+  }
 }
 
 async function runSlate() {
   runButton.disabled = true;
-  message.textContent = 'Loading…';
+  message.textContent = 'Loading...';
   try {
     const body = await jsonOrError(`/api/slate?${queryString()}`);
     renderGames(body.games);
@@ -186,6 +196,10 @@ def create_app(service: SlateService, access_code: str | None) -> FastAPI:
     """Create the protected web dashboard around a slate service."""
     app = FastAPI(title="NFL game model")
     store = SessionStore()
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error(request, exc):
+        return JSONResponse({"error": "Invalid request"}, status_code=422)
 
     @app.exception_handler(SlateInputError)
     async def input_error(request, exc):
