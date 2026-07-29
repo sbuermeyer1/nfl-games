@@ -18,3 +18,188 @@ Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 ## Tests
 
     .\.venv\Scripts\python.exe -m pytest
+
+## Web dashboard operations
+
+The dashboard serves the checked-in, immutable
+`data/processed/game_features.parquet` artifact. It reads that artifact at startup;
+there is no website refresh endpoint and the web service cannot mutate the artifact.
+
+### Run locally
+
+Use the explicit unauthenticated mode only on the local machine. It binds to the
+numeric loopback address (`127.0.0.1`) and cannot be combined with `ACCESS_CODE`.
+
+```powershell
+# Explicit loopback-only local mode
+.\.venv\Scripts\python.exe scripts\game_app.py --no-auth
+```
+
+For a protected local or network-accessible run, set a non-empty code in the
+environment before starting. `ACCESS_CODE` is required in every normal startup;
+when it is absent, blank, or whitespace, the process exits nonzero rather than
+starting without protection. Do not commit a real code.
+
+```powershell
+# Protected local/network mode
+$env:ACCESS_CODE = "local-test-only"
+.\.venv\Scripts\python.exe scripts\game_app.py
+```
+
+The protected server listens on `0.0.0.0` and honors `PORT` (default `8000`). The
+unauthenticated `--no-auth` server always binds only to loopback. A protected login
+sets a secure, HTTP-only session cookie, so a plain-HTTP browser will not retain it.
+Use HTTPS for an end-to-end protected-browser test; the automated `TestClient`
+coverage exercises the cookie behavior.
+
+### Dashboard and API
+
+The page initializes to the latest available season and its latest week. The
+available seasons, weeks, and estimators come from the packaged artifact; changing a
+season reloads its valid weeks. The default estimator is `ridge` and the default edge
+threshold is `2.0`. The table compares model and market spread/total values, and an
+edge marker is informational rather than betting advice.
+
+The browser uses these read-only endpoints:
+
+- `GET /health` returns `{"ok": true}` and is public so platform health checks work.
+- `GET /api/options` returns selectors and their defaults; `GET /api/weeks?season=...`
+  returns valid weeks for one season.
+- `GET /api/slate?season=...&week=...&estimator=ridge&edge_threshold=2.0` returns the
+  active slate as JSON.
+- `GET /api/slate.csv` accepts the same parameters and downloads CSV with the same
+  rows and ordering as the displayed slate.
+
+In protected mode, unauthenticated browser routes redirect to `/login` and API routes
+return `401`. Wrong login codes return `401`; repeated failed attempts from one client
+address are temporarily throttled with `429`.
+
+### Refresh the packaged artifact
+
+Refreshes are an offline, reviewed data change. Build, test, backtest, and commit the
+new parquet artifact together:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_dataset.py --start-season 2016 --end-season 2026
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
+git add data/processed/game_features.parquet
+git commit -m "data: refresh packaged game features"
+```
+
+The website has no refresh endpoint and cannot mutate the artifact. Do not use a web
+deployment as a substitute for this workflow.
+
+### Render deployment and proxy boundary
+
+`render.yaml` defines the Docker Blueprint service named `ashburn-nfl`. In Render,
+create the Blueprint from the reviewed integrated `master` branch, confirm that service
+name, and set a non-empty private `ACCESS_CODE` secret. Do not put the secret in the
+repository, a command history, request logs, or a deployment note. The image packages
+the immutable parquet artifact and starts `scripts/game_app.py`; production therefore
+fails closed if `ACCESS_CODE` is missing.
+
+Login throttling uses the first `X-Forwarded-For` address. Treat that header as trusted
+only at the Render proxy boundary: the production app must be reachable only through
+Render's managed ingress, which replaces/controls forwarded client metadata. Never
+expose the application port directly to the Internet or accept arbitrary client-supplied
+`X-Forwarded-For` headers; doing so lets callers choose their throttle identity. For a
+direct local test, use the connection address rather than assuming forwarded headers
+are trustworthy.
+
+Before DNS cutover, deploy and verify the Render hostname from a cookie-free external
+client. Do not add `nfl.ashburn-capital.com` until these checks pass:
+
+```powershell
+$renderBase = (Read-Host "Paste the exact Render service URL").TrimEnd("/")
+curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" "$renderBase/"
+curl.exe -s -o NUL -w "%{http_code}" "$renderBase/api/options"
+curl.exe -s -o NUL -w "%{http_code}" -H "Content-Type: application/json" -d "{\"code\":\"definitely-wrong\"}" "$renderBase/login"
+```
+
+Expected results are `303` redirecting to `/login`, `401`, and `401`. Restart the
+Render service and repeat the same cookie-free checks; an old session must no longer
+authorize the API. Only after the Render-hostname checks pass should DNS point
+`nfl.ashburn-capital.com` at Render. Once Render has verified the domain and issued
+TLS, repeat the same checks against `https://nfl.ashburn-capital.com` and then sign in
+interactively to confirm selector changes and the CSV download.
+
+### Release verification and troubleshooting
+
+Run the local test and style suite before accepting a release:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check src tests scripts
+```
+
+Re-run the statistical acceptance baseline after any artifact refresh. Stop and
+investigate if any value moves; a web-only change must not change these results.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
+```
+
+```text
+games:            1359
+margin MAE:       10.274   market: 9.752
+total MAE:        10.684   market: 10.309
+ATS hit rate:     0.4977   n=1326
+O/U hit rate:     0.5022   n=1348
+model_coef:       -0.0218
+market_coef:      1.0755
+r2:               0.2083
+```
+
+The following release gate remains mandatory for the exact reviewed commit accepted
+for deployment: Docker and Render must build that exact commit; a container started
+without `ACCESS_CODE` must exit nonzero; with a non-default protected `PORT`, `/health`
+must return `200` and `/` must return `303` to `/login`; and the Render Blueprint must
+validate and build successfully. Local Docker verification was unavailable on the Task
+6 workstation, so it is not a passed check and must be completed before release.
+
+If startup reports that `ACCESS_CODE` is required, set a non-empty secret for protected
+mode or use `--no-auth` only for loopback development. If it reports a missing packaged
+dataset, restore `data/processed/game_features.parquet` from the accepted revision and
+rebuild the image. A protected page that returns to `/login` over plain HTTP is expected:
+the secure cookie requires HTTPS. A `422` from slate endpoints usually means the season,
+week, estimator, or threshold is not an available valid selection; reload `/api/options`
+and choose its advertised values. A `429` login response requires waiting for its
+`Retry-After` interval rather than repeatedly retrying.
+
+### Executable Docker and Blueprint gate
+
+Run this gate from a clean checkout of the exact reviewed commit that is being accepted
+for release. Substitute a non-secret local value only for the smoke container; set the
+real private value only in Render.
+
+```powershell
+$acceptedCommit = (git rev-parse HEAD)
+git status --short                         # expected: no tracked output
+docker build --tag "ashburn-nfl:$acceptedCommit" .
+
+# Expected: nonzero exit and an ACCESS_CODE-required startup error.
+docker run --rm --name ashburn-nfl-missing-code "ashburn-nfl:$acceptedCommit"
+if ($LASTEXITCODE -eq 0) { throw "Container started without ACCESS_CODE" }
+
+# Expected: 200; 303 with a /login redirect; 401.
+$container = docker run --detach --rm --name ashburn-nfl-smoke `
+  -e ACCESS_CODE=local-test-only -e PORT=8765 -p 8765:8765 "ashburn-nfl:$acceptedCommit"
+try {
+  Start-Sleep -Seconds 2
+  curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:8765/health
+  curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://127.0.0.1:8765/
+  curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:8765/api/options
+} finally {
+  docker stop $container | Out-Null
+}
+
+# Render CLI 2.7.1+; expected: Blueprint validation succeeds.
+render blueprints validate render.yaml
++```
++
++Then create the Blueprint in Render from that same accepted integrated `master` commit,
++provide the private `ACCESS_CODE` when prompted, and require a successful Render Docker
++build before continuing to the external checks above. The Blueprint validation command
++does not create or modify Render resources; deployment and DNS changes remain the
++separate post-integration release task.
