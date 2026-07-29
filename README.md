@@ -62,7 +62,7 @@ edge marker is informational rather than betting advice.
 
 The browser uses these read-only endpoints:
 
-- `GET /health` returns `{"ok": true}` and is public so platform health checks work.
+- `GET /health` returns `{"ok": true}` and is public; it is available for an optional configured HTTP health check.
 - `GET /api/options` returns selectors and their defaults; `GET /api/weeks?season=...`
   returns valid weeks for one season.
 - `GET /api/slate?season=...&week=...&estimator=ridge&edge_threshold=2.0` returns the
@@ -99,13 +99,13 @@ repository, a command history, request logs, or a deployment note. The image pac
 the immutable parquet artifact and starts `scripts/game_app.py`; production therefore
 fails closed if `ACCESS_CODE` is missing.
 
-Login throttling uses the first `X-Forwarded-For` address. Treat that header as trusted
-only at the Render proxy boundary: the production app must be reachable only through
-Render's managed ingress, which replaces/controls forwarded client metadata. Never
-expose the application port directly to the Internet or accept arbitrary client-supplied
-`X-Forwarded-For` headers; doing so lets callers choose their throttle identity. For a
-direct local test, use the connection address rather than assuming forwarded headers
-are trustworthy.
+Login throttling reads the first `X-Forwarded-For` address when that header is present.
+Rely on it only at the deployed Render ingress boundary, where the application is not
+directly exposed and forwarded client metadata is controlled by the proxy. The application
+itself does not verify who supplied this header: a directly reachable server lets callers
+choose their throttle identity by sending it. Never expose the application port directly
+to the Internet. For a direct local protected smoke test, do not send an
+`X-Forwarded-For` header; that smoke does not prove the production proxy boundary.
 
 Before DNS cutover, deploy and verify the Render hostname from a cookie-free external
 client. Do not add `nfl.ashburn-capital.com` until these checks pass:
@@ -119,10 +119,21 @@ curl.exe -s -o NUL -w "%{http_code}" -H "Content-Type: application/json" -d "{\"
 
 Expected results are `303` redirecting to `/login`, `401`, and `401`. Restart the
 Render service and repeat the same cookie-free checks; an old session must no longer
-authorize the API. Only after the Render-hostname checks pass should DNS point
-`nfl.ashburn-capital.com` at Render. Once Render has verified the domain and issued
-TLS, repeat the same checks against `https://nfl.ashburn-capital.com` and then sign in
-interactively to confirm selector changes and the CSV download.
+authorize the API. DNS cutover must not happen until these Render-hostname checks pass.
+
+For the custom-domain cutover, add `nfl.ashburn-capital.com` in Render first and record
+the exact CNAME target Render displays. Before changing DNS, record the current DNS
+record type, value, and TTL (or explicitly record that no prior record exists). Create or
+replace the DNS record with the exact Render-provided CNAME target, wait for propagation,
+and wait for Render domain verification and TLS issuance. Then repeat the same cookie-free
+checks against `https://nfl.ashburn-capital.com` and sign in interactively to confirm
+selector changes and the CSV download.
+
+If Render verification, TLS issuance, or the post-cutover auth smoke fails, roll back:
+restore the recorded prior DNS type, value, and TTL; if there was no prior target, remove
+the new record. Wait for propagation, then re-run the known-good cookie-free checks on
+the Render hostname above. Do not retry the custom-domain cutover until the problem is
+fixed and the Render-hostname checks pass again.
 
 ### Release verification and troubleshooting
 
@@ -133,8 +144,9 @@ Run the local test and style suite before accepting a release:
 .\.venv\Scripts\python.exe -m ruff check src tests scripts
 ```
 
-Re-run the statistical acceptance baseline after any artifact refresh. Stop and
-investigate if any value moves; a web-only change must not change these results.
+Re-run the statistical acceptance baseline after any artifact refresh. This normalized
+acceptance summary preserves the invariants (the CLI renders `total  MAE` with two spaces).
+Stop and investigate if any value moves; a web-only change must not change these results.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
