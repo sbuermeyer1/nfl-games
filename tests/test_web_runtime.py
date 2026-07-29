@@ -1,6 +1,6 @@
-
 import pytest
 
+from nfl_game.paths import PROCESSED_DIR
 from nfl_game.web.runtime import RuntimeConfig, RuntimeConfigError, load_app, resolve_runtime
 
 
@@ -36,10 +36,11 @@ def test_unprotected_runtime_config_accepts_numeric_loopback_hosts(host):
     assert config.host == host
 
 
-def test_unprotected_runtime_config_rejects_non_loopback_host():
-    """Catch a manually constructed no-auth config exposing the dashboard publicly."""
+@pytest.mark.parametrize("host", ["0.0.0.0", "localhost", "::"])
+def test_unprotected_runtime_config_rejects_public_or_non_numeric_hosts(host):
+    """Catch no-auth validation that permits a wildcard bind or hostname instead of loopback."""
     with pytest.raises(RuntimeConfigError, match="numeric loopback"):
-        RuntimeConfig(access_code=None, host="0.0.0.0", port=8000)
+        RuntimeConfig(access_code=None, host=host, port=8000)
 
 
 def test_no_auth_rejects_access_code_to_avoid_ambiguous_intent():
@@ -58,6 +59,13 @@ def test_invalid_port_is_configuration_error():
     """Catch malformed ports that would otherwise fail unclearly during server startup."""
     with pytest.raises(RuntimeConfigError, match="PORT"):
         resolve_runtime(no_auth=False, environ={"ACCESS_CODE": "letmein", "PORT": "abc"})
+
+
+@pytest.mark.parametrize("port", ["0", "65536"])
+def test_runtime_rejects_ports_outside_tcp_range(port):
+    """Catch an off-by-one port check that passes an invalid TCP port to Uvicorn."""
+    with pytest.raises(RuntimeConfigError, match="PORT must be between 1 and 65535"):
+        resolve_runtime(no_auth=False, environ={"ACCESS_CODE": "letmein", "PORT": port})
 
 
 def test_load_app_rejects_missing_dataset(tmp_path):
@@ -95,3 +103,49 @@ def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):
 
     assert caught.value.code == 2
     assert "ACCESS_CODE is required" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "environ", "expected_config"),
+    [
+        (
+            [],
+            {"ACCESS_CODE": "launch-code", "PORT": "9123"},
+            RuntimeConfig(access_code="launch-code", host="0.0.0.0", port=9123),
+        ),
+        (
+            ["--no-auth"],
+            {"PORT": "9124"},
+            RuntimeConfig(access_code=None, host="127.0.0.1", port=9124),
+        ),
+    ],
+)
+def test_entrypoint_passes_resolved_runtime_to_loader_and_server(
+    monkeypatch, argv, environ, expected_config
+):
+    """Catch launcher wiring that serves the wrong app, dataset, host, or port."""
+    from scripts import game_app
+
+    monkeypatch.delenv("ACCESS_CODE", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+
+    app = object()
+    loader_calls = []
+    server_calls = []
+
+    def load_app_without_starting_server(config, dataset_path):
+        loader_calls.append((config, dataset_path))
+        return app
+
+    def record_server_start(server_app, *, host, port):
+        server_calls.append((server_app, host, port))
+
+    monkeypatch.setattr(game_app, "load_app", load_app_without_starting_server)
+    monkeypatch.setattr(game_app.uvicorn, "run", record_server_start)
+
+    game_app.main(argv)
+
+    assert loader_calls == [(expected_config, PROCESSED_DIR / "game_features.parquet")]
+    assert server_calls == [(app, expected_config.host, expected_config.port)]
