@@ -82,6 +82,99 @@ def test_rejects_duplicate_game_ids():
         SlateService(duplicate)
 
 
+@pytest.mark.parametrize("column", ["game_id", "away_team", "home_team"])
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_rejects_null_or_blank_game_identity_values(column, value):
+    """Catch incomplete identifiers or matchups being accepted as a healthy dataset."""
+    rows = feature_rows()
+    rows.loc[0, column] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^game features column '{column}' contains null or blank values$",
+    ):
+        SlateService(rows)
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected"),
+    [
+        ("season", None, "contains null values"),
+        ("week", "one", "must contain numeric values"),
+        ("season", math.inf, "contains non-finite values"),
+        ("week", 1.5, "contains fractional values"),
+        ("season", 0, "contains non-positive values"),
+        ("week", -1, "contains non-positive values"),
+    ],
+)
+def test_rejects_invalid_season_and_week_values(column, value, expected):
+    """Catch selectors that cannot safely become positive integer route options."""
+    rows = feature_rows()
+    rows[column] = rows[column].astype(object)
+    rows.loc[0, column] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^game features column '{column}' {expected}$",
+    ):
+        SlateService(rows)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "contains null values"),
+        ("not-a-number", "must contain numeric values"),
+        (math.inf, "contains non-finite values"),
+        (-math.inf, "contains non-finite values"),
+    ],
+)
+def test_rejects_invalid_model_feature_values(value, expected):
+    """Catch feature values that the fitted estimators cannot safely consume."""
+    column = FEATURE_COLS[0]
+    rows = feature_rows()
+    rows[column] = rows[column].astype(object)
+    rows.loc[0, column] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^game feature column '{column}' {expected}$",
+    ):
+        SlateService(rows)
+
+
+@pytest.mark.parametrize("column", ["spread_line", "total_line", "margin", "total_points"])
+def test_line_and_target_columns_allow_missing_values(column):
+    """Catch startup validation that rejects legitimate missing market or target values."""
+    rows = feature_rows()
+    rows[column] = rows[column].astype(object)
+    rows.loc[0, column] = None
+
+    SlateService(rows)
+
+
+@pytest.mark.parametrize("column", ["spread_line", "total_line", "margin", "total_points"])
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("not-a-number", "must contain numeric values or null"),
+        (math.inf, "contains infinite values"),
+        (-math.inf, "contains infinite values"),
+    ],
+)
+def test_rejects_invalid_line_and_target_values(column, value, expected):
+    """Catch invalid market/target values while preserving the missing-value contract."""
+    rows = feature_rows()
+    rows[column] = rows[column].astype(object)
+    rows.loc[0, column] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^game line/target column '{column}' {expected}$",
+    ):
+        SlateService(rows)
+
+
 def test_requires_prior_season_data_to_build_a_bundle():
     with pytest.raises(SlateUnavailableError, match="no calibration data is available"):
         SlateService(feature_rows()).slate(2024, 1, "ridge", 2.0)

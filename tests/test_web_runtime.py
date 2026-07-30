@@ -1,5 +1,9 @@
+import math
+
+import pandas as pd
 import pytest
 
+from nfl_game.model.features import FEATURE_COLS
 from nfl_game.paths import PROCESSED_DIR
 from nfl_game.web.runtime import RuntimeConfig, RuntimeConfigError, load_app, resolve_runtime
 
@@ -90,6 +94,54 @@ def test_load_app_wraps_parquet_read_failure(tmp_path, monkeypatch):
     with pytest.raises(RuntimeConfigError, match="cannot load packaged dataset") as caught:
         load_app(config, dataset)
     assert "invalid parquet footer" in str(caught.value)
+
+
+def startup_feature_rows() -> pd.DataFrame:
+    rows = []
+    for season in (2024, 2025):
+        row = {column: 0.1 for column in FEATURE_COLS}
+        row.update(
+            game_id=f"{season}_01_AAA_BBB",
+            season=season,
+            week=1,
+            away_team="AAA",
+            home_team="BBB",
+            spread_line=2.5,
+            total_line=44.5,
+            margin=3.0,
+            total_points=45.0,
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected"),
+    [
+        ("game_id", None, "contains null or blank values"),
+        ("week", 1.5, "contains fractional values"),
+        (FEATURE_COLS[0], "not-a-number", "must contain numeric values"),
+        ("total_line", math.inf, "contains infinite values"),
+    ],
+)
+def test_load_app_wraps_invalid_dataset_schema(tmp_path, column, value, expected):
+    """Catch schema-invalid packaged data passing startup and breaking a later request."""
+    rows = startup_feature_rows()
+    if isinstance(value, str):
+        rows[column] = value
+    elif column == "week":
+        rows[column] = rows[column].astype(float)
+        rows.loc[0, column] = value
+    else:
+        rows.loc[0, column] = value
+    dataset = tmp_path / "invalid.parquet"
+    rows.to_parquet(dataset)
+    config = resolve_runtime(no_auth=True, environ={})
+
+    with pytest.raises(RuntimeConfigError, match="cannot load packaged dataset") as caught:
+        load_app(config, dataset)
+
+    assert expected in str(caught.value)
 
 
 def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):

@@ -64,6 +64,10 @@ const downloadButton = document.getElementById('download');
 const message = document.getElementById('message');
 const results = document.getElementById('results');
 let latestWeekRequest = 0;
+let latestSlateRequest = 0;
+let renderedSlateQuery = null;
+runButton.disabled = true;
+downloadButton.disabled = true;
 
 function replaceOptions(select, values, selected) {
   select.replaceChildren();
@@ -139,6 +143,15 @@ function renderGames(games) {
   }
 }
 
+function invalidateSlate(runAvailable = true) {
+  latestSlateRequest += 1;
+  renderedSlateQuery = null;
+  results.replaceChildren();
+  message.textContent = '';
+  downloadButton.disabled = true;
+  runButton.disabled = !runAvailable;
+}
+
 async function loadWeeks(runAfter = false) {
   const request = ++latestWeekRequest;
   try {
@@ -155,17 +168,27 @@ async function loadWeeks(runAfter = false) {
 }
 
 async function runSlate() {
+  const request = ++latestSlateRequest;
+  const query = queryString();
+  renderedSlateQuery = null;
+  downloadButton.disabled = true;
   runButton.disabled = true;
   message.textContent = 'Loading...';
   try {
-    const body = await jsonOrError(`/api/slate?${queryString()}`);
+    const body = await jsonOrError(`/api/slate?${query}`);
+    if (request !== latestSlateRequest || query !== queryString()) return;
     renderGames(body.games);
+    renderedSlateQuery = query;
+    downloadButton.disabled = false;
     message.textContent = `${body.games.length} games`;
   } catch (error) {
+    if (request !== latestSlateRequest || query !== queryString()) return;
     results.replaceChildren();
     message.textContent = error.message;
   } finally {
-    runButton.disabled = false;
+    if (request === latestSlateRequest && query === queryString()) {
+      runButton.disabled = false;
+    }
   }
 }
 
@@ -182,10 +205,21 @@ async function initialize() {
   }
 }
 
-season.addEventListener('change', () => loadWeeks(true));
+season.addEventListener('change', () => {
+  invalidateSlate(false);
+  loadWeeks(true);
+});
+for (const selector of [week, estimator, edge]) {
+  selector.addEventListener('change', () => invalidateSlate());
+}
 runButton.addEventListener('click', runSlate);
 downloadButton.addEventListener('click', () => {
-  window.location = `/api/slate.csv?${queryString()}`;
+  if (downloadButton.disabled) return;
+  if (renderedSlateQuery === null || renderedSlateQuery !== queryString()) {
+    invalidateSlate();
+    return;
+  }
+  window.location = `/api/slate.csv?${renderedSlateQuery}`;
 });
 document.addEventListener('DOMContentLoaded', initialize);
 </script>

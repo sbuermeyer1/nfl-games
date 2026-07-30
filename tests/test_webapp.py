@@ -218,9 +218,27 @@ eval(input.script);
     week: { value: nodes.week.value, options: options('week') },
     estimator: { value: nodes.estimator.value, options: options('estimator') },
     edge: nodes.edge.value,
+    runDisabled: nodes.run.disabled,
+    downloadDisabled: nodes.download.disabled,
   });
 })().catch(error => { globalThis.__state = JSON.stringify({error: error.stack}); });
 """
+
+
+def dashboard_game(away_team="AAA", home_team="BBB"):
+    return {
+        "away_team": away_team,
+        "home_team": home_team,
+        "model_spread": 4.0,
+        "market_spread": 2.5,
+        "spread_gap": 1.5,
+        "cover_prob": 0.55,
+        "model_total": 46.0,
+        "market_total": 44.5,
+        "total_gap": 1.5,
+        "over_prob": 0.55,
+        "edge_flag": 0,
+    }
 
 
 def standard_responses():
@@ -349,20 +367,130 @@ def test_dashboard_ignores_late_week_response_after_rapid_season_changes():
     }
 
 
-def test_dashboard_download_encodes_the_active_query():
-    """Catch CSV navigation that drops or mis-encodes active selector values."""
+@pytest.mark.parametrize(
+    "old_response",
+    [
+        response(body={"games": [dashboard_game("OLD", "TEAM")]}),
+        response(status=503, body={"error": "old request failed"}),
+    ],
+    ids=["late-success", "late-error"],
+)
+def test_dashboard_ignores_out_of_order_slate_completion(old_response):
+    """Catch a late slate success or error taking ownership from the current selection."""
+    old_url = "/api/slate?season=2025&week=1&estimator=ridge&edge_threshold=2"
+    current_url = "/api/slate?season=2025&week=1&estimator=gbm&edge_threshold=2"
     responses = standard_responses()
+    responses[old_url] = {"deferred": True}
+    responses[current_url] = {"deferred": True}
     actions = initialize_actions() + [
-        {"type": "set", "target": "season", "value": "2025"},
-        {"type": "set", "target": "week", "value": "3"},
-        {"type": "set", "target": "estimator", "value": "ridge & test"},
-        {"type": "set", "target": "edge", "value": "2.5"},
+        {"type": "set", "target": "week", "value": "1"},
+        {"type": "fire", "target": "week", "event": "change", "wait": True},
+        {"type": "fire", "target": "run", "event": "click", "wait": False},
+        {"type": "set", "target": "estimator", "value": "gbm"},
+        {"type": "fire", "target": "estimator", "event": "change", "wait": True},
+        {"type": "fire", "target": "run", "event": "click", "wait": False},
+        {"type": "settle"},
+        {
+            "type": "resolve",
+            "url": current_url,
+            "response": response(body={"games": [dashboard_game("NEW", "TEAM")]}),
+        },
+        {"type": "settle"},
+        {"type": "resolve", "url": old_url, "response": old_response},
+        {"type": "settle"},
         {"type": "fire", "target": "download", "event": "click", "wait": True},
     ]
 
     state = dashboard_state(client(), responses, actions)
 
-    assert state["location"] == "/api/slate.csv?season=2025&week=3&estimator=ridge+%26+test&edge_threshold=2.5"
+    assert state["rows"][1]["cells"][0] == "NEW @ TEAM"
+    assert state["message"] == "1 games"
+    assert state["runDisabled"] is False
+    assert state["downloadDisabled"] is False
+    assert state["location"] == f"/api/slate.csv?{current_url.split('?', 1)[1]}"
+    assert state["unhandled"] == []
+
+
+def test_stale_slate_finally_does_not_enable_actions_for_a_pending_current_request():
+    """Catch an old request completion re-enabling actions while the current slate is pending."""
+    old_url = "/api/slate?season=2025&week=1&estimator=ridge&edge_threshold=2"
+    current_url = "/api/slate?season=2025&week=1&estimator=gbm&edge_threshold=2"
+    responses = standard_responses()
+    responses[old_url] = {"deferred": True}
+    responses[current_url] = {"deferred": True}
+    actions = initialize_actions() + [
+        {"type": "set", "target": "week", "value": "1"},
+        {"type": "fire", "target": "week", "event": "change", "wait": True},
+        {"type": "fire", "target": "run", "event": "click", "wait": False},
+        {"type": "set", "target": "estimator", "value": "gbm"},
+        {"type": "fire", "target": "estimator", "event": "change", "wait": True},
+        {"type": "fire", "target": "run", "event": "click", "wait": False},
+        {"type": "settle"},
+        {
+            "type": "resolve",
+            "url": old_url,
+            "response": response(body={"games": [dashboard_game("OLD", "TEAM")]}),
+        },
+        {"type": "settle"},
+    ]
+
+    state = dashboard_state(client(), responses, actions)
+
+    assert state["rows"] == []
+    assert state["message"] == "Loading..."
+    assert state["runDisabled"] is True
+    assert state["downloadDisabled"] is True
+
+
+@pytest.mark.parametrize(
+    ("target", "value", "extra_responses", "expected_run_disabled"),
+    [
+        ("season", "2024", {"/api/weeks?season=2024": {"deferred": True}}, True),
+        ("week", "1", {}, False),
+        ("estimator", "gbm", {}, False),
+        ("edge", "2.5", {}, False),
+    ],
+)
+def test_selector_change_invalidates_rendered_slate_and_csv(
+    target, value, extra_responses, expected_run_disabled
+):
+    """Catch any selector leaving stale rows or a stale CSV action available."""
+    responses = standard_responses()
+    responses.update(extra_responses)
+    actions = initialize_actions() + [
+        {"type": "set", "target": target, "value": value},
+        {"type": "fire", "target": target, "event": "change", "wait": False},
+        {"type": "settle"},
+        {"type": "fire", "target": "download", "event": "click", "wait": True},
+    ]
+
+    state = dashboard_state(client(), responses, actions)
+
+    assert state["rows"] == []
+    assert state["message"] == ""
+    assert state["runDisabled"] is expected_run_disabled
+    assert state["downloadDisabled"] is True
+    assert state["location"] == ""
+
+
+def test_dashboard_download_encodes_the_successfully_rendered_query():
+    """Catch CSV navigation that drops, mis-encodes, or bypasses rendered slate ownership."""
+    query = "season=2025&week=3&estimator=ridge+%26+test&edge_threshold=2.5"
+    responses = standard_responses()
+    responses[f"/api/slate?{query}"] = response(body={"games": []})
+    actions = initialize_actions() + [
+        {"type": "set", "target": "estimator", "value": "ridge & test"},
+        {"type": "fire", "target": "estimator", "event": "change", "wait": True},
+        {"type": "set", "target": "edge", "value": "2.5"},
+        {"type": "fire", "target": "edge", "event": "change", "wait": True},
+        {"type": "fire", "target": "run", "event": "click", "wait": True},
+        {"type": "fire", "target": "download", "event": "click", "wait": True},
+    ]
+
+    state = dashboard_state(client(), responses, actions)
+
+    assert state["downloadDisabled"] is False
+    assert state["location"] == f"/api/slate.csv?{query}"
 
 
 def test_options_and_weeks_routes_forward_arguments_and_errors():

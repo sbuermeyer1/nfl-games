@@ -1,10 +1,15 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 WORKDIR /app
 
+COPY requirements-build.txt requirements-prod.txt ./
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements-build.txt \
+    && python -m pip install --no-cache-dir --only-binary=:all: \
+        --require-hashes -r requirements-prod.txt
+
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir -e .
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 COPY scripts ./scripts
 COPY data/processed/game_features.parquet ./data/processed/game_features.parquet

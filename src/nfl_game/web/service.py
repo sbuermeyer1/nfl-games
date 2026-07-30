@@ -32,6 +32,9 @@ REQUIRED_COLUMNS = {
     "total_points",
     *FEATURE_COLS,
 }
+IDENTITY_COLUMNS = ("game_id", "away_team", "home_team")
+SELECTOR_COLUMNS = ("season", "week")
+LINE_TARGET_COLUMNS = ("spread_line", "total_line", "margin", "total_points")
 
 
 class SlateInputError(ValueError):
@@ -52,6 +55,60 @@ class ModelBundle:
     calibrator: Calibrator
 
 
+def _is_real_number(value) -> bool:
+    if isinstance(value, bool) or not pd.api.types.is_number(value):
+        return False
+    try:
+        float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return True
+
+
+def _validate_dataset_values(features: pd.DataFrame) -> None:
+    for column in IDENTITY_COLUMNS:
+        values = features[column]
+        blank = values.isna() | values.map(
+            lambda value: isinstance(value, str) and not value.strip()
+        )
+        if blank.any():
+            raise ValueError(
+                f"game features column {column!r} contains null or blank values"
+            )
+
+    for column in SELECTOR_COLUMNS:
+        values = features[column]
+        if values.isna().any():
+            raise ValueError(f"game features column {column!r} contains null values")
+        if any(not _is_real_number(value) for value in values):
+            raise ValueError(f"game features column {column!r} must contain numeric values")
+        numbers = [float(value) for value in values]
+        if any(not math.isfinite(value) for value in numbers):
+            raise ValueError(f"game features column {column!r} contains non-finite values")
+        if any(not value.is_integer() for value in numbers):
+            raise ValueError(f"game features column {column!r} contains fractional values")
+        if any(value <= 0 for value in numbers):
+            raise ValueError(f"game features column {column!r} contains non-positive values")
+
+    for column in FEATURE_COLS:
+        values = features[column]
+        if values.isna().any():
+            raise ValueError(f"game feature column {column!r} contains null values")
+        if any(not _is_real_number(value) for value in values):
+            raise ValueError(f"game feature column {column!r} must contain numeric values")
+        if any(not math.isfinite(float(value)) for value in values):
+            raise ValueError(f"game feature column {column!r} contains non-finite values")
+
+    for column in LINE_TARGET_COLUMNS:
+        values = features.loc[features[column].notna(), column]
+        if any(not _is_real_number(value) for value in values):
+            raise ValueError(
+                f"game line/target column {column!r} must contain numeric values or null"
+            )
+        if any(math.isinf(float(value)) for value in values):
+            raise ValueError(f"game line/target column {column!r} contains infinite values")
+
+
 class SlateService:
     def __init__(self, features: pd.DataFrame):
         missing = sorted(REQUIRED_COLUMNS - set(features.columns))
@@ -59,6 +116,7 @@ class SlateService:
             raise ValueError(f"game features missing required columns: {missing}")
         if features.empty:
             raise ValueError("game features dataset is empty")
+        _validate_dataset_values(features)
         if features["game_id"].duplicated().any():
             raise ValueError("game features contain duplicate game_id values")
         self._features = features.copy()

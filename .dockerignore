@@ -2,6 +2,8 @@
 !Dockerfile
 !pyproject.toml
 !README.md
+!requirements-build.txt
+!requirements-prod.txt
 !src/
 !src/**
 !scripts/

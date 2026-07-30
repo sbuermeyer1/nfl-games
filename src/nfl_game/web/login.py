@@ -31,22 +31,54 @@ LOGIN_PAGE = """<!doctype html>
 <form id="f" onsubmit="return submitCode(event)">
   <h1>NFL model access</h1>
   <input id="code" type="password" placeholder="Access code" autofocus>
-  <button type="submit">Enter</button>
+  <button id="submit" type="submit">Enter</button>
   <p class="err" id="err"></p>
 </form>
 <script>
+let loginPending = false;
+
 async function submitCode(e) {
   e.preventDefault();
+  if (loginPending) return false;
   const err = document.getElementById('err');
+  const codeInput = document.getElementById('code');
+  const submitButton = document.getElementById('submit');
   err.textContent = '';
-  const resp = await fetch('/login', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({code: document.getElementById('code').value}),
-  });
-  if (resp.ok) { window.location = '/'; return false; }
-  const body = await resp.json().catch(() => ({}));
-  err.textContent = body.error || 'Incorrect code';
+  loginPending = true;
+  codeInput.disabled = true;
+  submitButton.disabled = true;
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: codeInput.value}),
+    });
+    let body;
+    try {
+      body = await resp.json();
+    } catch (error) {
+      throw new Error('Login response was not JSON');
+    }
+    if (resp.ok) {
+      window.location = '/';
+      return false;
+    }
+    if (resp.status >= 500) {
+      err.textContent = 'Unable to sign in right now. Please try again.';
+      return false;
+    }
+    err.textContent = body.error || (
+      resp.status === 401
+        ? 'Incorrect code'
+        : 'Unable to sign in right now. Please try again.'
+    );
+  } catch (error) {
+    err.textContent = 'Unable to sign in right now. Please try again.';
+  } finally {
+    loginPending = false;
+    codeInput.disabled = false;
+    submitButton.disabled = false;
+  }
   return false;
 }
 </script>

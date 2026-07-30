@@ -90,6 +90,45 @@ git commit -m "data: refresh packaged game features"
 The website has no refresh endpoint and cannot mutate the artifact. Do not use a web
 deployment as a substitute for this workflow.
 
+### Reproducible container inputs
+
+`Dockerfile` pins the official `python:3.12-slim` multi-platform OCI index to
+`sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de`.
+That digest was checked at `2026-07-29T23:58:48Z` against the official Docker
+Registry v2 manifest endpoint and independently matched by Docker Hub's official tag API:
+
+```powershell
+$tokenUri = 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull'
+$registryToken = (Invoke-RestMethod -Uri $tokenUri).token
+curl.exe -sS -I -H "Authorization: Bearer $registryToken" `
+  -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" `
+  'https://registry-1.docker.io/v2/library/python/manifests/3.12-slim'
+Invoke-RestMethod 'https://hub.docker.com/v2/repositories/library/python/tags/3.12-slim' |
+  Select-Object digest,last_updated
+```
+
+The registry response was `200`, content type `application/vnd.oci.image.index.v1+json`,
+and reported the pinned `docker-content-digest`; the Hub tag was last updated
+`2026-07-16T11:07:24.538892Z`. `requirements-prod.txt` locks the CPython 3.12,
+x86_64 Linux (`manylinux_2_28`) runtime closure to exact selected-wheel hashes. It was
+resolved with `uv 0.12.0` using:
+
+```powershell
+uv pip compile pyproject.toml `
+  --python-platform x86_64-unknown-linux-gnu `
+  --python-version 3.12 `
+  --only-binary :all: `
+  --generate-hashes `
+  --no-annotate `
+  --upgrade `
+  -o requirements-prod.txt
+```
+
+`requirements-build.txt` separately pins and hashes pip and setuptools. Docker installs
+both locks with `--require-hashes`, then installs this project with dependency resolution
+and build isolation disabled. Re-resolve and re-verify the runtime lock if the production
+architecture changes.
+
 ### Render deployment and proxy boundary
 
 `render.yaml` defines the Docker Blueprint service named `ashburn-nfl`. In Render,
@@ -114,7 +153,9 @@ client. Do not add `nfl.ashburn-capital.com` until these checks pass:
 $renderBase = (Read-Host "Paste the exact Render service URL").TrimEnd("/")
 curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" "$renderBase/"
 curl.exe -s -o NUL -w "%{http_code}" "$renderBase/api/options"
-curl.exe -s -o NUL -w "%{http_code}" -H "Content-Type: application/json" -d "{\"code\":\"definitely-wrong\"}" "$renderBase/login"
+$wrongBody = '{"code":"definitely-wrong"}'
+$wrongBody | curl.exe -s -o NUL -w "%{http_code}" `
+  -H "Content-Type: application/json" --data-binary '@-' "$renderBase/login"
 ```
 
 Expected results are `303` redirecting to `/login`, `401`, and `401`. Restart the
