@@ -56,9 +56,7 @@ class SessionStore:
     def _evict_expired(self) -> None:
         """Remove expired sessions; caller must hold ``_lock``."""
         cutoff = self._clock() - self._ttl
-        expired = [
-            token for token, session in self._sessions.items() if session.last_seen < cutoff
-        ]
+        expired = [token for token, session in self._sessions.items() if session.last_seen < cutoff]
         for token in expired:
             del self._sessions[token]
 

@@ -72,9 +72,7 @@ def _validate_dataset_values(features: pd.DataFrame) -> None:
             lambda value: isinstance(value, str) and not value.strip()
         )
         if blank.any():
-            raise ValueError(
-                f"game features column {column!r} contains null or blank values"
-            )
+            raise ValueError(f"game features column {column!r} contains null or blank values")
 
     for column in SELECTOR_COLUMNS:
         values = features[column]
@@ -166,21 +164,13 @@ class SlateService:
     def _fit_bundle(self, season: int, estimator: str) -> ModelBundle:
         prior_seasons = sorted(
             int(value)
-            for value in self._features.loc[
-                self._features["season"] < season, "season"
-            ].unique()
+            for value in self._features.loc[self._features["season"] < season, "season"].unique()
         )
         if not prior_seasons:
-            raise SlateUnavailableError(
-                f"no calibration data is available before season {season}"
-            )
-        oos = walk_forward(
-            self._features, prior_seasons, estimator=estimator, alpha=DEFAULT_ALPHA
-        )
+            raise SlateUnavailableError(f"no calibration data is available before season {season}")
+        oos = walk_forward(self._features, prior_seasons, estimator=estimator, alpha=DEFAULT_ALPHA)
         if oos.empty:
-            raise SlateUnavailableError(
-                f"no calibration data is available before season {season}"
-            )
+            raise SlateUnavailableError(f"no calibration data is available before season {season}")
         train = self._features[self._features["season"] < season]
         try:
             calibrator = Calibrator().fit(oos)

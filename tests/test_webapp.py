@@ -312,7 +312,10 @@ def test_dashboard_loading_message_is_ascii_safe():
     state = dashboard_state(
         client(),
         responses,
-        [{"type": "fire", "target": "document", "event": "DOMContentLoaded", "wait": False}, {"type": "settle"}],
+        [
+            {"type": "fire", "target": "document", "event": "DOMContentLoaded", "wait": False},
+            {"type": "settle"},
+        ],
     )
 
     assert state["message"] == "Loading..."
@@ -353,9 +356,17 @@ def test_dashboard_ignores_late_week_response_after_rapid_season_changes():
         {"type": "set", "target": "season", "value": "2025"},
         {"type": "fire", "target": "season", "event": "change", "wait": False},
         {"type": "settle"},
-        {"type": "resolve", "url": "/api/weeks?season=2025", "response": response(body={"weeks": [1, 3]})},
+        {
+            "type": "resolve",
+            "url": "/api/weeks?season=2025",
+            "response": response(body={"weeks": [1, 3]}),
+        },
         {"type": "settle"},
-        {"type": "resolve", "url": "/api/weeks?season=2024", "response": response(body={"weeks": [2]})},
+        {
+            "type": "resolve",
+            "url": "/api/weeks?season=2024",
+            "response": response(body={"weeks": [2]}),
+        },
         {"type": "settle"},
     ]
 

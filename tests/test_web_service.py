@@ -321,8 +321,7 @@ def test_csv_uses_same_rows_and_blanks_missing_values(monkeypatch):
 
     assert list(csv_rows[0]) == list(records[0])
     assert csv_rows == [
-        {key: "" if value is None else str(value) for key, value in row.items()}
-        for row in records
+        {key: "" if value is None else str(value) for key, value in row.items()} for row in records
     ]
     assert csv_rows[0]["market_total"] == ""
     assert csv_rows[0]["total_gap"] == ""
