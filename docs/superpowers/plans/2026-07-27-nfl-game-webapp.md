@@ -45,7 +45,7 @@
 - `tests/test_web_login.py` — correct/wrong/non-ASCII codes, secure cookie flags, and throttling.
 - `tests/test_webapp.py` — HTML, options, weeks, slate JSON, errors, and CSV parity.
 - `tests/test_web_runtime.py` — fail-closed configuration, loopback-only no-auth, and parquet startup errors.
-- `tests/test_deploy.py` — Docker, Render Blueprint, and packaged-artifact contracts.
+
 
 ### Modified/generated files
 
@@ -71,6 +71,8 @@
 
 - Consumes: `walk_forward(features_df, test_seasons, estimator, alpha)`, `GameModel(estimator, alpha)`, `Calibrator`, `build_slate`, `ESTIMATORS`, `DEFAULT_ALPHA`, `FEATURE_COLS`.
 - Produces: `SlateService.from_parquet(path)`, `SlateService.options()`, `SlateService.weeks(season)`, `SlateService.slate(season, week, estimator="ridge", edge_threshold=2.0)`, `SlateService.records(season, week, estimator="ridge", edge_threshold=2.0)`, `SlateService.csv(season, week, estimator="ridge", edge_threshold=2.0)`, `SlateInputError`, `SlateNotFoundError`, and `SlateUnavailableError`.
+
+**Execution amendment (owner-approved):** Steps 3–6 below contain a direct ordering conflict: the Step 1 validation tests call `slate`, Step 3 does not implement `slate`, and Step 6 later expects `slate`, `records`, and `csv` to be missing. For this task, add the complete behavioral test set before production code, retain the initial missing-module failure and the expanded-suite failure as red evidence, then implement the full service in one green phase. This is a test-order correction, not an exception from behavioral TDD.
 
 - [ ] **Step 1: Add web-test dependencies and write failing option/validation tests**
 
@@ -590,8 +592,6 @@ def test_store_evicts_oldest_at_capacity():
     assert len(store) == 2
 
 
-def test_cookie_name_is_specific_to_game_app():
-    assert COOKIE_NAME == "nfl_session"
 ```
 
 - [ ] **Step 2: Run the session tests and confirm the missing-module failure**
@@ -1576,7 +1576,6 @@ git commit -m "feat: add fail-closed web runtime"
 
 - Create: `Dockerfile`
 - Create: `render.yaml`
-- Create: `tests/test_deploy.py`
 - Modify: `.gitignore`
 - Add: `data/processed/game_features.parquet`
 
@@ -1585,42 +1584,9 @@ git commit -m "feat: add fail-closed web runtime"
 - Consumes: `scripts/game_app.py`, package metadata/source, and the single packaged parquet artifact.
 - Produces: Docker image listening on injected `PORT` and Render service `ashburn-nfl`.
 
-- [ ] **Step 1: Write failing deployment-contract tests**
+**TDD exception:** The user approved behavioral verification instead of source-text change-detector tests for `.gitignore`, `Dockerfile`, and `render.yaml`. Validate these configuration artifacts by building and running the image, inspecting the tracked artifact contract, and performing external Render checks.
 
-```python
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_packaged_dataset_exists():
-    assert (ROOT / "data/processed/game_features.parquet").is_file()
-
-
-def test_dockerfile_runs_fail_closed_entrypoint():
-    text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY data/processed/game_features.parquet" in text
-    assert 'CMD ["python", "scripts/game_app.py"]' in text
-    assert "--no-auth" not in text
-
-
-def test_render_blueprint_requires_private_access_code():
-    text = (ROOT / "render.yaml").read_text(encoding="utf-8")
-    assert "name: ashburn-nfl" in text
-    assert "runtime: docker" in text
-    assert "- key: ACCESS_CODE" in text
-    assert "sync: false" in text
-```
-
-- [ ] **Step 2: Run the deployment tests and confirm missing-file failures**
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_deploy.py -v
-```
-
-Expected: Dockerfile and Render Blueprint tests fail because the files do not exist.
-
-- [ ] **Step 3: Narrow the processed-data ignore**
+- [ ] **Step 1: Narrow the processed-data ignore**
 
 Append:
 
@@ -1636,7 +1602,7 @@ git status --short --untracked-files=all data/processed
 
 Expected: `game_features.parquet` appears; backup parquet and generated slate files remain ignored.
 
-- [ ] **Step 4: Create the production Dockerfile**
+- [ ] **Step 2: Create the production Dockerfile**
 
 ```dockerfile
 FROM python:3.12-slim
@@ -1654,7 +1620,7 @@ EXPOSE 8000
 CMD ["python", "scripts/game_app.py"]
 ```
 
-- [ ] **Step 5: Create the Render Blueprint**
+- [ ] **Step 3: Create the Render Blueprint**
 
 ```yaml
 services:
@@ -1668,35 +1634,35 @@ services:
         sync: false
 ```
 
-- [ ] **Step 6: Run deployment tests and inspect the artifact**
+- [ ] **Step 4: Inspect the tracked artifact contract**
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_deploy.py -v
 git check-ignore -v data/processed/game_features_fixed.parquet
 git status --short --untracked-files=all data/processed
+git diff --check
 ```
 
-Expected: tests pass; backup artifacts remain ignored; only `game_features.parquet` is untracked/trackable.
+Expected: backup artifacts remain ignored; only `game_features.parquet` is untracked/trackable; no whitespace errors are reported.
 
-- [ ] **Step 7: Build and smoke-test the container**
+- [ ] **Step 5: Build and behaviorally smoke-test the container**
 
 ```powershell
 docker build -t nfl-game-web .
+docker run --rm nfl-game-web
 docker run --rm -d --name nfl-game-web-smoke -p 18000:8000 -e ACCESS_CODE=smoke-test-only nfl-game-web
 curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:18000/health
 curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://127.0.0.1:18000/
 docker stop nfl-game-web-smoke
 ```
 
-Expected: health is `200`; root is `303` with redirect to `/login`; the container stops cleanly.
+Expected: the first run exits nonzero because `ACCESS_CODE` is required; with an access code, health is `200`, root is `303` with redirect to `/login`, and the container stops cleanly.
 
-- [ ] **Step 8: Commit deployment packaging**
+- [ ] **Step 6: Commit deployment packaging**
 
 ```powershell
-git add .gitignore Dockerfile render.yaml tests/test_deploy.py data/processed/game_features.parquet
+git add .gitignore Dockerfile render.yaml data/processed/game_features.parquet
 git commit -m "deploy: package NFL game web service"
 ```
-
 ---
 
 ### Task 6: Documentation and Full Local Verification
@@ -1791,7 +1757,7 @@ git commit -m "docs: add NFL web app operations runbook"
 
 ---
 
-### Task 7: Render Deployment, External Verification, and Custom Domain
+### Post-Integration Task 7: Render Deployment, External Verification, and Custom Domain
 
 **Files:**
 
@@ -1802,7 +1768,9 @@ git commit -m "docs: add NFL web app operations runbook"
 - Consumes: pushed `master`, Render Blueprint, private `ACCESS_CODE`, and DNS access for `ashburn-capital.com`.
 - Produces: verified production service at `https://nfl.ashburn-capital.com`.
 
-- [ ] **Step 1: Verify the branch and push the reviewed implementation**
+Task 7 begins only after Tasks 1–6 pass, the final whole-branch review is clean, and `superpowers:finishing-a-development-branch` has integrated the feature into `master`. Deploy the integrated `master`, never the isolated feature branch.
+
+- [ ] **Step 1: Verify integrated master and push the reviewed implementation**
 
 ```powershell
 git status --short
@@ -1810,7 +1778,7 @@ git log --oneline origin/master..master
 git push origin master
 ```
 
-Expected: clean worktree, only reviewed web-app commits ahead before push, and successful push.
+Expected: the primary checkout is on `master`, the worktree is clean, the reviewed feature commits are integrated, and the push succeeds.
 
 - [ ] **Step 2: Create the Render Blueprint service**
 

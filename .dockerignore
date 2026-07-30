@@ -1,0 +1,15 @@
+*
+!Dockerfile
+!pyproject.toml
+!README.md
+!requirements-build.txt
+!requirements-prod.txt
+!src/
+!src/**
+!scripts/
+!scripts/**
+!data/
+data/*
+!data/processed/
+data/processed/*
+!data/processed/game_features.parquet

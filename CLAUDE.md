@@ -12,7 +12,10 @@ verbatim working ledger from the build, preserved for the reasoning behind each 
 it is a historical record, append-only and chronological, and some of its claims were
 falsified by the very reviews it describes. Treat it as evidence, never as authority, and
 prefer this file wherever the two disagree. Per-task briefs and reports are archived in
-`docs/sdd-archive/`.
+`docs/sdd-archive/`. `docs/webapp-development-log.md` is the equivalent ledger for the web
+dashboard built on top of the model, under the same evidence-not-authority rule; the
+dashboard's operational documentation lives in the "Web dashboard operations" section of
+`README.md`.
 
 ## Commands
 
