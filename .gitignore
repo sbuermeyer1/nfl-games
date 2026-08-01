@@ -17,3 +17,4 @@ data/processed/*
 # Isolated feature workspaces.
 .worktrees/
 !data/processed/game_features.parquet
+!data/processed/tracker_ledger.parquet
