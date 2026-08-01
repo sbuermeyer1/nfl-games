@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from nfl_game.tracking.ledger import grade_ledger, validate_ledger
+from nfl_game.tracking.ledger import build_backtest_ledger, grade_ledger, validate_ledger
 
 
 def facts(*overrides):
@@ -109,3 +109,54 @@ def test_validate_ledger_rejects_duplicates_non_ridge_and_stale_grades():
     stale.loc[0, "spread_grade"] = "loss"
     with pytest.raises(ValueError, match="derived"):
         validate_ledger(stale)
+
+
+def test_build_backtest_ledger_validates_paired_missing_close_grades():
+    predictions = pd.DataFrame(
+        {
+            "game_id": ["2025_01_AAA_BBB"],
+            "season": [2025],
+            "week": [1],
+            "away_team": ["AAA"],
+            "home_team": ["BBB"],
+            "model_margin": [4.0],
+            "model_total": [46.0],
+            "spread_line": [3.0],
+            "total_line": [44.0],
+            "margin": [7.0],
+            "total_points": [48.0],
+        }
+    )
+
+    ledger = build_backtest_ledger(predictions)
+
+    assert ledger.loc[0, "record_type"] == "backtest"
+    assert pd.isna(ledger.loc[0, "spread_close_grade"])
+    assert pd.isna(ledger.loc[0, "total_close_grade"])
+    validate_ledger(ledger)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("published_spread_line", 2.5),
+        ("published_total_line", 43.5),
+    ],
+)
+def test_validate_ledger_rejects_published_lines_on_backtest(column, value):
+    ledger = grade_ledger(
+        facts(
+            {
+                "record_type": "backtest",
+                "closing_spread_line": 3.0,
+                "closing_total_line": 44.0,
+                "published_spread_line": np.nan,
+                "published_total_line": np.nan,
+                "published_at": pd.NaT,
+            }
+        )
+    )
+    ledger.loc[0, column] = value
+
+    with pytest.raises(ValueError, match="published"):
+        validate_ledger(ledger)

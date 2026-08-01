@@ -181,7 +181,10 @@ def build_backtest_ledger(predictions, model_version=HISTORICAL_MODEL_VERSION):
 
 
 def _same_values(actual, expected):
-    return actual.eq(expected) | (actual.isna() & expected.isna())
+    missing = object()
+    actual_values = actual.astype(object).where(actual.notna(), missing)
+    expected_values = expected.astype(object).where(expected.notna(), missing)
+    return actual_values.eq(expected_values)
 
 
 def _validate_numeric(ledger):
@@ -257,8 +260,9 @@ def validate_ledger(ledger):
     ):
         if not _same_values(ledger.loc[backtest, official], ledger.loc[backtest, closing]).all():
             raise ValueError("backtest official and closing lines must match")
-    if ledger.loc[backtest, "published_at"].notna().any():
-        raise ValueError("backtest rows cannot have a published timestamp")
+    published_fields = ["published_spread_line", "published_total_line", "published_at"]
+    if ledger.loc[backtest, published_fields].notna().any().any():
+        raise ValueError("backtest rows cannot have published snapshot fields")
     for official, published in (
         ("official_spread_line", "published_spread_line"),
         ("official_total_line", "published_total_line"),
