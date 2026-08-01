@@ -76,3 +76,69 @@ def test_cli_writes_the_validated_ledger(tmp_path, monkeypatch):
 
     written = pd.read_parquet(output_path)
     assert written["game_id"].tolist() == predictions()["game_id"].tolist()
+
+
+@pytest.mark.parametrize(
+    "actual",
+    [
+        {
+            "games": 2,
+            "ats_hit_rate": 1.0,
+            "ou_n": 2,
+            "ou_hit_rate": 1.0,
+        },
+        {
+            "games": 2,
+            "ats_n": 2,
+            "ats_hit_rate": 1.0,
+            "ou_n": 2,
+            "ou_hit_rate": 1.0,
+            "unexpected": 0,
+        },
+    ],
+)
+def test_acceptance_gate_rejects_missing_or_extra_actual_metrics(monkeypatch, actual):
+    expected = {
+        "games": 2,
+        "ats_n": 2,
+        "ats_hit_rate": 1.0,
+        "ou_n": 2,
+        "ou_hit_rate": 1.0,
+    }
+    monkeypatch.setattr(build_tracker, "acceptance_metrics", lambda ledger: actual)
+
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.assert_acceptance_baseline(pd.DataFrame(), expected)
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        {
+            "games": 2,
+            "ats_hit_rate": 1.0,
+            "ou_n": 2,
+            "ou_hit_rate": 1.0,
+        },
+        {
+            "games": 2,
+            "ats_n": 2,
+            "ats_hit_rate": 1.0,
+            "ou_n": 2,
+            "ou_hit_rate": 1.0,
+            "unexpected": 0,
+        },
+    ],
+)
+def test_acceptance_gate_rejects_missing_or_extra_expected_metrics(monkeypatch, expected):
+    actual = {
+        "games": 2,
+        "ats_n": 2,
+        "ats_hit_rate": 1.0,
+        "ou_n": 2,
+        "ou_hit_rate": 1.0,
+    }
+    monkeypatch.setattr(build_tracker, "acceptance_metrics", lambda ledger: actual)
+
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.assert_acceptance_baseline(pd.DataFrame(), expected)

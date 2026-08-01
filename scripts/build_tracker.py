@@ -45,7 +45,7 @@ def acceptance_metrics(ledger: pd.DataFrame) -> dict:
 def assert_acceptance_baseline(ledger: pd.DataFrame, expected: dict) -> None:
     """Reject any change to the fixed historical corpus or all-prediction records."""
     actual = acceptance_metrics(ledger)
-    if set(expected) != set(EXPECTED_BASELINE):
+    if set(actual) != set(expected) or set(expected) != set(EXPECTED_BASELINE):
         raise RuntimeError("acceptance baseline changed")
 
     for key, value in actual.items():
