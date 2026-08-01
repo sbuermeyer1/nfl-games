@@ -1,3 +1,6 @@
+import json
+from decimal import Decimal
+
 import pandas as pd
 import pytest
 
@@ -104,6 +107,18 @@ def test_records_convert_every_pandas_missing_value_to_json_none():
     row = TrackerService(service_ledger(missing_actual_total=True)).records("backtest", "2024")[0]
 
     assert row["actual_total"] is None
+
+
+def test_records_normalize_decimal_scalars_for_strict_json():
+    ledger = service_ledger()
+    ledger["actual_total"] = ledger["actual_total"].astype(object)
+    ledger.loc[ledger["season"] == 2024, "actual_total"] = Decimal("50.5")
+
+    records = TrackerService(ledger).records("backtest", 2024)
+
+    assert type(records[0]["actual_total"]) is float
+    assert records[0]["actual_total"] == 50.5
+    assert json.loads(json.dumps(records, allow_nan=False))[0]["actual_total"] == 50.5
 
 
 def test_rejects_any_model_version_other_than_the_official_historical_version():

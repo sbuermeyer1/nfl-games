@@ -1,6 +1,6 @@
 """Read-only web boundary for the immutable performance tracker ledger."""
 
-from numbers import Integral
+from numbers import Integral, Number
 from pathlib import Path
 
 import pandas as pd
@@ -93,4 +93,12 @@ class TrackerService:
 
 def _json_value(value):
     """Convert pandas' scalar missing values into JSON-compatible nulls."""
-    return None if value is None or pd.isna(value) else value
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Number):
+        return float(value)
+    return value
