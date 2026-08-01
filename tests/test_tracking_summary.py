@@ -62,6 +62,7 @@ def test_summary_separates_live_and_backtest_and_counts_pushes():
     assert summary["all_predictions"]["total"]["n_graded"] == 3
     assert [row["min_edge"] for row in summary["spread_edges"]] == [5.0, 10.0, 15.0]
     assert [row["record"]["n_graded"] for row in summary["spread_edges"]] == [2, 1, 0]
+    assert [row["record"]["pushes"] for row in summary["spread_edges"]] == [1, 1, 1]
     assert {row["season"] for row in summary["by_season"]} == {2024, 2025}
 
 

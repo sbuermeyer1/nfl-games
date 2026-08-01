@@ -103,6 +103,18 @@ def test_summary_and_records_validate_selections():
         service.records("backtest", "all")
 
 
+def test_advertised_historical_season_returns_its_summary_and_audit_row():
+    service = TrackerService(service_ledger())
+    season = service.options()["historical_seasons"][0]
+
+    summary = service.summary("backtest", season)
+    records = service.records("backtest", season)
+
+    assert summary["season"] == season
+    assert summary["qualified"]["spread"]["n_graded"] == 1
+    assert [row["season"] for row in records] == [season]
+
+
 def test_records_convert_every_pandas_missing_value_to_json_none():
     row = TrackerService(service_ledger(missing_actual_total=True)).records("backtest", "2024")[0]
 

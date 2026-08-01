@@ -60,6 +60,65 @@ def test_grade_ledger_pins_direction_grades_and_positive_clv():
     assert (away.total_pick, away.total_grade, away.total_clv) == ("under", "win", 2.0)
 
 
+def test_live_loss_and_closing_grades_retain_frozen_official_picks():
+    out = grade_ledger(
+        facts(
+            {
+                "game_id": "home-over-loss",
+                "actual_margin": 2.0,
+                "actual_total": 43.0,
+                "closing_spread_line": 1.0,
+                "closing_total_line": 46.0,
+            },
+            {
+                "game_id": "away-under-loss",
+                "model_margin": 1.0,
+                "actual_margin": 4.0,
+                "closing_spread_line": 5.0,
+                "model_total": 40.0,
+                "actual_total": 45.0,
+                "closing_total_line": 42.0,
+            },
+            {
+                "game_id": "closing-pending",
+                "closing_spread_line": np.nan,
+                "closing_total_line": np.nan,
+            },
+        )
+    ).set_index("game_id")
+
+    home_over = out.loc["home-over-loss"]
+    assert (home_over.spread_pick, home_over.spread_grade, home_over.spread_close_grade) == (
+        "home",
+        "loss",
+        "win",
+    )
+    assert (home_over.total_pick, home_over.total_grade, home_over.total_close_grade) == (
+        "over",
+        "loss",
+        "loss",
+    )
+    assert (home_over.spread_clv, home_over.total_clv) == (-2.0, 2.0)
+
+    away_under = out.loc["away-under-loss"]
+    assert (away_under.spread_pick, away_under.spread_grade, away_under.spread_close_grade) == (
+        "away",
+        "loss",
+        "win",
+    )
+    assert (away_under.total_pick, away_under.total_grade, away_under.total_close_grade) == (
+        "under",
+        "loss",
+        "loss",
+    )
+    assert (away_under.spread_clv, away_under.total_clv) == (-2.0, 2.0)
+
+    pending = out.loc["closing-pending"]
+    assert (pending.spread_close_grade, pending.total_close_grade) == ("pending", "pending")
+    assert pd.isna(pending.spread_clv)
+    assert pd.isna(pending.total_clv)
+
+
 def test_push_no_pick_and_pending_are_distinct():
     out = grade_ledger(
         facts(
@@ -109,6 +168,26 @@ def test_validate_ledger_rejects_duplicates_non_ridge_and_stale_grades():
     stale.loc[0, "spread_grade"] = "loss"
     with pytest.raises(ValueError, match="derived"):
         validate_ledger(stale)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("season", "2025"), ("week", True), ("week", "1")],
+)
+def test_validate_ledger_rejects_noncanonical_season_and_week_values(column, value):
+    ledger = grade_ledger(facts({}))
+    ledger[column] = ledger[column].astype(object)
+    ledger.loc[0, column] = value
+
+    with pytest.raises(ValueError, match=f"{column} must be a positive whole number"):
+        validate_ledger(ledger)
+
+
+@pytest.mark.parametrize("value", [2025, np.int64(2025)])
+def test_validate_ledger_accepts_python_and_numpy_integer_seasons(value):
+    ledger = grade_ledger(facts({"season": value, "week": np.int64(1)}))
+
+    validate_ledger(ledger)
 
 
 def test_build_backtest_ledger_validates_paired_missing_close_grades():

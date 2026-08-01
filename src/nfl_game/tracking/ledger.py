@@ -1,5 +1,7 @@
 """Immutable, reproducible grading for model prediction records."""
 
+from numbers import Integral
+
 import numpy as np
 import pandas as pd
 
@@ -235,12 +237,12 @@ def validate_ledger(ledger):
         raise ValueError("duplicate ledger key")
 
     for column in ("season", "week"):
-        values = pd.to_numeric(ledger[column], errors="coerce")
+        values = ledger[column]
         if (
-            values.isna().any()
-            or not np.isfinite(values.to_numpy(dtype=float)).all()
+            not values.map(
+                lambda value: isinstance(value, Integral) and not isinstance(value, bool)
+            ).all()
             or not (values > 0).all()
-            or not (values % 1 == 0).all()
         ):
             raise ValueError(f"{column} must be a positive whole number")
 
