@@ -7,6 +7,7 @@ from pathlib import Path
 
 from nfl_game.web.app import create_app
 from nfl_game.web.service import SlateService
+from nfl_game.web.tracker_service import TrackerService
 
 
 class RuntimeConfigError(RuntimeError):
@@ -52,13 +53,24 @@ def resolve_runtime(no_auth: bool, environ: Mapping[str, str]) -> RuntimeConfig:
     )
 
 
-def load_app(config: RuntimeConfig, dataset_path: str | Path):
-    """Load the packaged dataset through the read-only slate service."""
-    path = Path(dataset_path)
-    if not path.is_file():
-        raise RuntimeConfigError(f"packaged dataset not found: {path}")
+def load_app(
+    config: RuntimeConfig,
+    dataset_path: str | Path,
+    tracker_path: str | Path,
+):
+    """Load both packaged artifacts through their read-only web services."""
+    dataset = Path(dataset_path)
+    tracker = Path(tracker_path)
+    if not dataset.is_file():
+        raise RuntimeConfigError(f"packaged dataset not found: {dataset}")
+    if not tracker.is_file():
+        raise RuntimeConfigError(f"packaged tracker ledger not found: {tracker}")
     try:
-        service = SlateService.from_parquet(path)
+        slate_service = SlateService.from_parquet(dataset)
     except Exception as exc:
-        raise RuntimeConfigError(f"cannot load packaged dataset {path}: {exc}") from exc
-    return create_app(service, access_code=config.access_code)
+        raise RuntimeConfigError(f"cannot load packaged dataset {dataset}: {exc}") from exc
+    try:
+        tracker_service = TrackerService.from_parquet(tracker)
+    except Exception as exc:
+        raise RuntimeConfigError(f"cannot load packaged tracker ledger {tracker}: {exc}") from exc
+    return create_app(slate_service, tracker_service, access_code=config.access_code)

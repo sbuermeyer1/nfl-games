@@ -77,13 +77,15 @@ def test_load_app_rejects_missing_dataset(tmp_path):
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="packaged dataset not found"):
-        load_app(config, tmp_path / "missing.parquet")
+        load_app(config, tmp_path / "missing.parquet", tmp_path / "missing-tracker.parquet")
 
 
 def test_load_app_wraps_parquet_read_failure(tmp_path, monkeypatch):
     """Catch corrupt packaged data escaping as an unhelpful startup exception."""
     dataset = tmp_path / "broken.parquet"
+    tracker = tmp_path / "tracker.parquet"
     dataset.write_bytes(b"not parquet")
+    tracker.touch()
 
     def fail(path):
         raise ValueError("invalid parquet footer")
@@ -92,7 +94,7 @@ def test_load_app_wraps_parquet_read_failure(tmp_path, monkeypatch):
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="cannot load packaged dataset") as caught:
-        load_app(config, dataset)
+        load_app(config, dataset, tracker)
     assert "invalid parquet footer" in str(caught.value)
 
 
@@ -135,13 +137,45 @@ def test_load_app_wraps_invalid_dataset_schema(tmp_path, column, value, expected
     else:
         rows.loc[0, column] = value
     dataset = tmp_path / "invalid.parquet"
+    tracker = tmp_path / "tracker.parquet"
     rows.to_parquet(dataset)
+    tracker.touch()
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="cannot load packaged dataset") as caught:
-        load_app(config, dataset)
+        load_app(config, dataset, tracker)
 
     assert expected in str(caught.value)
+
+
+def test_load_app_rejects_missing_tracker_ledger(tmp_path):
+    """Catch startup continuing when the reviewed tracker artifact is absent."""
+    dataset = tmp_path / "features.parquet"
+    startup_feature_rows().to_parquet(dataset)
+    config = resolve_runtime(no_auth=True, environ={})
+
+    with pytest.raises(RuntimeConfigError, match="packaged tracker ledger not found"):
+        load_app(config, dataset, tmp_path / "missing-tracker.parquet")
+
+
+def test_load_app_wraps_tracker_parquet_read_failure(tmp_path, monkeypatch):
+    """Catch a corrupt tracker artifact escaping without a clear startup error."""
+    dataset = tmp_path / "features.parquet"
+    tracker = tmp_path / "broken-tracker.parquet"
+    startup_feature_rows().to_parquet(dataset)
+    tracker.write_bytes(b"not parquet")
+
+    def fail(path):
+        raise ValueError("invalid tracker parquet footer")
+
+    monkeypatch.setattr("nfl_game.web.runtime.TrackerService.from_parquet", fail)
+    config = resolve_runtime(no_auth=True, environ={})
+
+    with pytest.raises(RuntimeConfigError, match="cannot load packaged tracker ledger") as caught:
+        load_app(config, dataset, tracker)
+
+    assert "invalid tracker parquet footer" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ValueError)
 
 
 def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):
@@ -187,8 +221,8 @@ def test_entrypoint_passes_resolved_runtime_to_loader_and_server(
     loader_calls = []
     server_calls = []
 
-    def load_app_without_starting_server(config, dataset_path):
-        loader_calls.append((config, dataset_path))
+    def load_app_without_starting_server(config, dataset_path, tracker_path):
+        loader_calls.append((config, dataset_path, tracker_path))
         return app
 
     def record_server_start(server_app, *, host, port):
@@ -199,5 +233,11 @@ def test_entrypoint_passes_resolved_runtime_to_loader_and_server(
 
     game_app.main(argv)
 
-    assert loader_calls == [(expected_config, PROCESSED_DIR / "game_features.parquet")]
+    assert loader_calls == [
+        (
+            expected_config,
+            PROCESSED_DIR / "game_features.parquet",
+            PROCESSED_DIR / "tracker_ledger.parquet",
+        )
+    ]
     assert server_calls == [(app, expected_config.host, expected_config.port)]

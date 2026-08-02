@@ -12,6 +12,7 @@ from nfl_game.web.service import (
     SlateNotFoundError,
     SlateUnavailableError,
 )
+from nfl_game.web.tracker_service import TrackerInputError
 
 PAGE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 
@@ -82,9 +83,41 @@ class FakeService:
         return f"game_id,season,week\n2025_01_AAA_BBB,{season},{week}\n"
 
 
-def client(service=None, access_code=None):
+class FakeTrackerService:
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def options(self):
+        self.calls.append(("options",))
+        return {
+            "record_types": ["backtest", "live"],
+            "historical_seasons": [2024, 2025],
+            "default_record_type": "backtest",
+            "default_season": "all",
+            "model_version": "ridge-v1",
+            "qualified_edge": 2.0,
+            "spread_edge_thresholds": [5.0, 10.0, 15.0],
+            "live_available": False,
+        }
+
+    def summary(self, record_type, season):
+        self.calls.append(("summary", record_type, season))
+        if record_type == "research":
+            raise TrackerInputError("invalid record type")
+        return {"available": True, "record_type": record_type, "season": season}
+
+    def records(self, record_type, season):
+        self.calls.append(("records", record_type, season))
+        return [{"game_id": "2025_01_AAA_BBB"}]
+
+
+def client(service=None, tracker_service=None, access_code=None):
     return TestClient(
-        create_app(service or FakeService(), access_code=access_code),
+        create_app(
+            service or FakeService(),
+            tracker_service or FakeTrackerService(),
+            access_code=access_code,
+        ),
         base_url="https://testserver",
         follow_redirects=False,
     )
@@ -518,6 +551,62 @@ def test_options_and_weeks_routes_forward_arguments_and_errors():
     assert invalid.json() == {"error": "season 1999 is not available"}
 
 
+def test_tracker_routes_forward_exact_selections_and_link_from_slate():
+    """Catch missing tracker navigation or routes that coerce or reorder service selections."""
+    tracker = FakeTrackerService()
+    http_client = client(tracker_service=tracker)
+
+    slate_page = http_client.get("/")
+    tracker_page = http_client.get("/tracker")
+    options = http_client.get("/api/tracker/options")
+    summary = http_client.get(
+        "/api/tracker/summary", params={"record_type": "backtest", "season": "all"}
+    )
+    games = http_client.get(
+        "/api/tracker/games", params={"record_type": "backtest", "season": 2025}
+    )
+
+    assert '<a href="/tracker">Performance tracker</a>' in slate_page.text
+    assert tracker_page.status_code == 200
+    assert "NFL Performance Tracker" in tracker_page.text
+    assert options.json()["model_version"] == "ridge-v1"
+    assert summary.json() == {
+        "available": True,
+        "record_type": "backtest",
+        "season": "all",
+    }
+    assert games.json() == {"games": [{"game_id": "2025_01_AAA_BBB"}]}
+    assert tracker.calls == [
+        ("options",),
+        ("summary", "backtest", "all"),
+        ("records", "backtest", 2025),
+    ]
+
+
+def test_tracker_input_errors_are_client_safe_422s():
+    """Catch tracker selection errors becoming a 500 or exposing framework internals."""
+    response = client().get(
+        "/api/tracker/summary", params={"record_type": "research", "season": "all"}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "invalid record type"}
+    assert "traceback" not in response.text.lower()
+
+
+def test_auth_protects_tracker_page_and_api():
+    """Catch tracker endpoints being accidentally added to the public auth allowlist."""
+    http_client = client(access_code="letmein")
+
+    page = http_client.get("/tracker")
+    api = http_client.get("/api/tracker/options")
+
+    assert page.status_code == 303
+    assert page.headers["location"] == "/login"
+    assert api.status_code == 401
+    assert api.json() == {"error": "session expired"}
+
+
 def test_slate_defaults_and_csv_forward_matching_arguments_and_content():
     """Catch slate routes that use different defaults, arguments, or CSV payloads."""
     service = FakeService()
@@ -589,7 +678,7 @@ def test_slate_and_csv_share_unavailable_and_empty_error_mappings(path, params, 
 def test_unexpected_error_is_generic_and_hides_internal_message():
     """Catch unexpected route errors that expose exception details in the response."""
     safe_client = TestClient(
-        create_app(FakeService(), access_code=None),
+        create_app(FakeService(), FakeTrackerService(), access_code=None),
         raise_server_exceptions=False,
     )
     response = safe_client.get(

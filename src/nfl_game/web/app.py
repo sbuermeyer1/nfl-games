@@ -16,6 +16,8 @@ from nfl_game.web.service import (
     SlateUnavailableError,
 )
 from nfl_game.web.session import SessionStore
+from nfl_game.web.tracker_page import TRACKER_PAGE
+from nfl_game.web.tracker_service import TrackerInputError, TrackerService
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ PAGE = """<!doctype html>
   .note { color: #555; font-size: .9rem; }
 </style>
 <main>
+  <nav aria-label="Site navigation"><a href="/tracker">Performance tracker</a></nav>
   <h1>NFL Game Model</h1>
   <p>Weekly model-versus-market margins and totals.</p>
   <div class="controls">
@@ -226,7 +229,11 @@ document.addEventListener('DOMContentLoaded', initialize);
 """
 
 
-def create_app(service: SlateService, access_code: str | None) -> FastAPI:
+def create_app(
+    service: SlateService,
+    tracker_service: TrackerService,
+    access_code: str | None,
+) -> FastAPI:
     """Create the protected web dashboard around a slate service."""
     app = FastAPI(title="NFL game model")
     store = SessionStore()
@@ -237,6 +244,10 @@ def create_app(service: SlateService, access_code: str | None) -> FastAPI:
 
     @app.exception_handler(SlateInputError)
     async def input_error(request, exc):
+        return JSONResponse({"error": str(exc)}, status_code=422)
+
+    @app.exception_handler(TrackerInputError)
+    async def tracker_input_error(request, exc):
         return JSONResponse({"error": str(exc)}, status_code=422)
 
     @app.exception_handler(SlateNotFoundError)
@@ -256,6 +267,10 @@ def create_app(service: SlateService, access_code: str | None) -> FastAPI:
     def index():
         return PAGE
 
+    @app.get("/tracker", response_class=HTMLResponse)
+    def tracker():
+        return TRACKER_PAGE
+
     @app.get("/health")
     def health():
         return {"ok": True}
@@ -267,6 +282,18 @@ def create_app(service: SlateService, access_code: str | None) -> FastAPI:
     @app.get("/api/weeks")
     def weeks(season: int):
         return {"weeks": service.weeks(season)}
+
+    @app.get("/api/tracker/options")
+    def tracker_options():
+        return tracker_service.options()
+
+    @app.get("/api/tracker/summary")
+    def tracker_summary(record_type: str = "backtest", season: str = "all"):
+        return tracker_service.summary(record_type, season)
+
+    @app.get("/api/tracker/games")
+    def tracker_games(season: int, record_type: str = "backtest"):
+        return {"games": tracker_service.records(record_type, season)}
 
     @app.get("/api/slate")
     def slate(

@@ -19,7 +19,11 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
     try:
         config = resolve_runtime(args.no_auth, os.environ)
-        app = load_app(config, PROCESSED_DIR / "game_features.parquet")
+        app = load_app(
+            config,
+            PROCESSED_DIR / "game_features.parquet",
+            PROCESSED_DIR / "tracker_ledger.parquet",
+        )
     except RuntimeConfigError as exc:
         parser.error(str(exc))
     uvicorn.run(app, host=config.host, port=config.port)
