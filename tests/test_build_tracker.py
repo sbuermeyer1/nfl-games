@@ -21,6 +21,12 @@ def predictions():
     )
 
 
+def predictions_with_pushes():
+    frame = predictions()
+    frame.loc[0, ["margin", "total_points"]] = [3.0, 44.0]
+    return frame
+
+
 def test_builder_is_ridge_only_and_forwards_the_requested_seasons(monkeypatch):
     calls = []
 
@@ -31,8 +37,14 @@ def test_builder_is_ridge_only_and_forwards_the_requested_seasons(monkeypatch):
     monkeypatch.setattr(build_tracker, "walk_forward", fake_walk_forward)
     expected = {
         "games": 2,
+        "ats_wins": 2,
+        "ats_losses": 0,
+        "ats_pushes": 0,
         "ats_n": 2,
         "ats_hit_rate": 1.0,
+        "ou_wins": 2,
+        "ou_losses": 0,
+        "ou_pushes": 0,
         "ou_n": 2,
         "ou_hit_rate": 1.0,
     }
@@ -53,13 +65,45 @@ def test_acceptance_gate_rejects_any_corpus_or_hit_rate_drift():
     ledger = build_tracker.build_backtest_ledger(predictions())
     wrong = {
         "games": 3,
+        "ats_wins": 2,
+        "ats_losses": 0,
+        "ats_pushes": 0,
         "ats_n": 2,
         "ats_hit_rate": 1.0,
+        "ou_wins": 2,
+        "ou_losses": 0,
+        "ou_pushes": 0,
         "ou_n": 2,
         "ou_hit_rate": 1.0,
     }
     with pytest.raises(RuntimeError, match="acceptance baseline changed"):
         build_tracker.assert_acceptance_baseline(ledger, wrong)
+
+
+def test_acceptance_gate_rejects_spread_push_becoming_pending():
+    accepted = build_tracker.build_backtest_ledger(predictions_with_pushes())
+    expected = build_tracker.acceptance_metrics(accepted)
+    drifted_predictions = predictions_with_pushes()
+    drifted_predictions.loc[0, "margin"] = pd.NA
+    drifted = build_tracker.build_backtest_ledger(drifted_predictions)
+
+    assert accepted.loc[0, "spread_grade"] == "push"
+    assert drifted.loc[0, "spread_grade"] == "pending"
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.assert_acceptance_baseline(drifted, expected)
+
+
+def test_acceptance_gate_rejects_total_push_becoming_no_pick():
+    accepted = build_tracker.build_backtest_ledger(predictions_with_pushes())
+    expected = build_tracker.acceptance_metrics(accepted)
+    drifted_predictions = predictions_with_pushes()
+    drifted_predictions.loc[0, "model_total"] = drifted_predictions.loc[0, "total_line"]
+    drifted = build_tracker.build_backtest_ledger(drifted_predictions)
+
+    assert accepted.loc[0, "total_grade"] == "push"
+    assert drifted.loc[0, "total_grade"] == "no_pick"
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.assert_acceptance_baseline(drifted, expected)
 
 
 def test_cli_writes_the_validated_ledger(tmp_path, monkeypatch):
@@ -83,14 +127,26 @@ def test_cli_writes_the_validated_ledger(tmp_path, monkeypatch):
     [
         {
             "games": 2,
+            "ats_wins": 2,
+            "ats_losses": 0,
+            "ats_pushes": 0,
             "ats_hit_rate": 1.0,
+            "ou_wins": 2,
+            "ou_losses": 0,
+            "ou_pushes": 0,
             "ou_n": 2,
             "ou_hit_rate": 1.0,
         },
         {
             "games": 2,
+            "ats_wins": 2,
+            "ats_losses": 0,
+            "ats_pushes": 0,
             "ats_n": 2,
             "ats_hit_rate": 1.0,
+            "ou_wins": 2,
+            "ou_losses": 0,
+            "ou_pushes": 0,
             "ou_n": 2,
             "ou_hit_rate": 1.0,
             "unexpected": 0,
@@ -100,8 +156,14 @@ def test_cli_writes_the_validated_ledger(tmp_path, monkeypatch):
 def test_acceptance_gate_rejects_missing_or_extra_actual_metrics(monkeypatch, actual):
     expected = {
         "games": 2,
+        "ats_wins": 2,
+        "ats_losses": 0,
+        "ats_pushes": 0,
         "ats_n": 2,
         "ats_hit_rate": 1.0,
+        "ou_wins": 2,
+        "ou_losses": 0,
+        "ou_pushes": 0,
         "ou_n": 2,
         "ou_hit_rate": 1.0,
     }
@@ -116,14 +178,26 @@ def test_acceptance_gate_rejects_missing_or_extra_actual_metrics(monkeypatch, ac
     [
         {
             "games": 2,
+            "ats_wins": 2,
+            "ats_losses": 0,
+            "ats_pushes": 0,
             "ats_hit_rate": 1.0,
+            "ou_wins": 2,
+            "ou_losses": 0,
+            "ou_pushes": 0,
             "ou_n": 2,
             "ou_hit_rate": 1.0,
         },
         {
             "games": 2,
+            "ats_wins": 2,
+            "ats_losses": 0,
+            "ats_pushes": 0,
             "ats_n": 2,
             "ats_hit_rate": 1.0,
+            "ou_wins": 2,
+            "ou_losses": 0,
+            "ou_pushes": 0,
             "ou_n": 2,
             "ou_hit_rate": 1.0,
             "unexpected": 0,
@@ -133,8 +207,14 @@ def test_acceptance_gate_rejects_missing_or_extra_actual_metrics(monkeypatch, ac
 def test_acceptance_gate_rejects_missing_or_extra_expected_metrics(monkeypatch, expected):
     actual = {
         "games": 2,
+        "ats_wins": 2,
+        "ats_losses": 0,
+        "ats_pushes": 0,
         "ats_n": 2,
         "ats_hit_rate": 1.0,
+        "ou_wins": 2,
+        "ou_losses": 0,
+        "ou_pushes": 0,
         "ou_n": 2,
         "ou_hit_rate": 1.0,
     }

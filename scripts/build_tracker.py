@@ -20,8 +20,14 @@ from nfl_game.tracking.summary import summarize_selection
 HISTORICAL_SEASONS = tuple(range(2021, 2026))
 EXPECTED_BASELINE = {
     "games": 1359,
+    "ats_wins": 660,
+    "ats_losses": 666,
+    "ats_pushes": 33,
     "ats_n": 1326,
     "ats_hit_rate": 0.497737556561086,
+    "ou_wins": 677,
+    "ou_losses": 671,
+    "ou_pushes": 11,
     "ou_n": 1348,
     "ou_hit_rate": 0.5022255192878339,
 }
@@ -35,8 +41,14 @@ def acceptance_metrics(ledger: pd.DataFrame) -> dict:
     ou = all_predictions["total"]
     return {
         "games": len(ledger),
+        "ats_wins": ats["wins"],
+        "ats_losses": ats["losses"],
+        "ats_pushes": ats["pushes"],
         "ats_n": ats["n_graded"],
         "ats_hit_rate": ats["win_rate"],
+        "ou_wins": ou["wins"],
+        "ou_losses": ou["losses"],
+        "ou_pushes": ou["pushes"],
         "ou_n": ou["n_graded"],
         "ou_hit_rate": ou["win_rate"],
     }
