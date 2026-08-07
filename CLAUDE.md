@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-All four layers are implemented: `data/`, `ratings/`, `model/`, `market/`. Check contents
-before assuming any extension exists.
+All six layers are implemented: `data/`, `ratings/`, `model/`, `market/`, `tracking/`,
+`web/`. Check contents before assuming any extension exists.
 
 **This file is authoritative for how the project works.** `docs/development-log.md` is the
 verbatim working ledger from the build, preserved for the reasoning behind each decision —
@@ -27,6 +27,7 @@ dashboard's operational documentation lives in the "Web dashboard operations" se
 
     .\.venv\Scripts\python.exe scripts\build_dataset.py --start-season 2016 --end-season 2025
     .\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
+    .\.venv\Scripts\python.exe scripts\build_tracker.py
     .\.venv\Scripts\python.exe scripts\slate.py --season 2025 --week 1
 
 - `build_dataset.py` loads pbp/schedules/NGS, builds as-of ratings and features, and
@@ -37,6 +38,9 @@ dashboard's operational documentation lives in the "Web dashboard operations" se
   margin/total MAE against the market, ATS/O-U hit rates, ATS by edge threshold, and
   `market_comparison_regression`. This is the acceptance test -- see "Reading the
   backtest" below.
+- `build_tracker.py` rebuilds the offline historical Ridge `ridge-v1` tracker ledger from
+  the cached feature artifact and accepts only the regression baseline below. Run it after
+  rebuilding features; review and commit both Parquet artifacts together.
 - `slate.py --season Y --week W` fits `GameModel` on every season before `Y`, calibrates
   on `walk_forward` predictions from every season before `Y` (letting `walk_forward` skip
   whatever it must -- see the degenerate-feature note below), and writes/prints a
@@ -56,8 +60,13 @@ league-week mean and flagged via `<metric>_imputed`.
 
 ## Architecture
 
-Data flows one direction: `data` → `ratings` → `model` → `market`. Do not introduce
-reverse dependencies.
+Data flows one direction and must remain:
+
+```text
+data -> ratings -> model -> market -> tracking -> web
+```
+
+Do not introduce reverse dependencies.
 
 - `ratings/epa.py` — the core. `fit_ratings` regresses play EPA on offense/defense team
   dummies, which is what separates team quality from schedule quality. **Both `off_rating`
@@ -86,6 +95,10 @@ reverse dependencies.
   convention, positive = home favored) end to end — keeping one sign convention is what
   keeps this from quietly inverting every pick. `edge_flag` is 1 when
   `abs(spread_gap) >= edge_threshold`; it is a flag, not advice.
+- `tracking/` — tracker artifacts are built offline and read only at runtime. Only Ridge
+  `ridge-v1` is official. Historical and live records must never aggregate together;
+  thresholds are fixed at 2 points for qualified picks and cumulative 5/10/15-point
+  spread cohorts. A model-version change must not rewrite published live history.
 
 ## Reading the backtest
 
@@ -117,6 +130,24 @@ Treat these as an invariant: any change that is not deliberately a behavior chan
 leave them untouched. If they move, stop and find out why before going further — and read
 the paragraph above before judging the direction, because a number that looks like an
 improvement is the one that most needs auditing.
+
+### Tracker acceptance records
+
+The reviewed `ridge-v1` historical ledger covers 1,359 games in 2021–2025 and must
+produce these exact all-season records:
+
+| selection | record | n | win rate |
+| --- | --- | ---: | ---: |
+| Qualified ATS 2+ | 336-371-16 | 707 | 0.475248 |
+| Qualified O/U 2+ | 396-407-6 | 803 | 0.493151 |
+| All ATS | 660-666-33 | 1326 | 0.497738 |
+| All O/U | 677-671-11 | 1348 | 0.502226 |
+| Spread 5+ | 102-102-4 | 204 | 0.500000 |
+| Spread 10+ | 9-11-0 | 20 | 0.450000 |
+| Spread 15+ | 1-1-0 | 2 | 0.500000 |
+
+Pushes are excluded from each win-rate denominator. The 5+/10+/15+ cohorts are
+cumulative, not disjoint buckets.
 
 ## Degenerate training features
 

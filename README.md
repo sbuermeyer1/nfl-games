@@ -21,9 +21,10 @@ Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 
 ## Web dashboard operations
 
-The dashboard serves the checked-in, immutable
-`data/processed/game_features.parquet` artifact. It reads that artifact at startup;
-there is no website refresh endpoint and the web service cannot mutate the artifact.
+The dashboard serves the checked-in, immutable `data/processed/game_features.parquet`
+and `data/processed/tracker_ledger.parquet` artifacts. It reads both artifacts at
+startup; there is no website refresh endpoint and the web service cannot mutate either
+artifact.
 
 ### Run locally
 
@@ -70,22 +71,45 @@ The browser uses these read-only endpoints:
 - `GET /api/slate.csv` accepts the same parameters and downloads CSV with the same
   rows and ordering as the displayed slate.
 
+### Performance tracker
+
+`/tracker` separates historical walk-forward backtests from live published picks.
+Historical records cover Ridge `ridge-v1`, 2021–2025, against closing lines. Qualified
+picks use 2+ points, and spread groups are cumulative 5+/10+/15+; pushes do not enter
+win-rate denominators. The live section starts in 2026 and remains unavailable until the
+separate live workflow is built. Future official live grades use frozen published lines,
+while CLV and the close record are secondary.
+
+The four tracker routes are read-only:
+
+- `GET /tracker` serves the tracker page.
+- `GET /api/tracker/options` returns the available record types and seasons.
+- `GET /api/tracker/summary?record_type=backtest&season=all` returns the selected record
+  summary.
+- `GET /api/tracker/games?record_type=backtest&season=2025` returns the selected season's
+  game-level audit records.
+
 In protected mode, unauthenticated browser routes redirect to `/login` and API routes
 return `401`. Wrong login codes return `401`; repeated failed attempts from one client
 address are temporarily throttled with `429`.
 
 ### Refresh the packaged artifact
 
-Refreshes are an offline, reviewed data change. Build, test, backtest, and commit the
-new parquet artifact together:
+Refreshes are an offline, reviewed data change. After rebuilding features, rebuild the
+tracker with `.\.venv\Scripts\python.exe scripts\build_tracker.py`. Build, test,
+backtest, and commit both Parquet artifacts together:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_dataset.py --start-season 2016 --end-season 2026
+.\.venv\Scripts\python.exe scripts\build_tracker.py
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
-git add data/processed/game_features.parquet
-git commit -m "data: refresh packaged game features"
+git add data/processed/game_features.parquet data/processed/tracker_ledger.parquet
+git commit -m "data: refresh packaged NFL artifacts"
 ```
+
+When upstream results change, both Parquet artifacts must be reviewed, committed, and
+deployed together.
 
 The website has no refresh endpoint and cannot mutate the artifact. Do not use a web
 deployment as a substitute for this workflow.
@@ -135,7 +159,7 @@ architecture changes.
 create the Blueprint from the reviewed integrated `master` branch, confirm that service
 name, and set a non-empty private `ACCESS_CODE` secret. Do not put the secret in the
 repository, a command history, request logs, or a deployment note. The image packages
-the immutable parquet artifact and starts `scripts/game_app.py`; production therefore
+both immutable Parquet artifacts and starts `scripts/game_app.py`; production therefore
 fails closed if `ACCESS_CODE` is missing.
 
 Login throttling reads the first `X-Forwarded-For` address when that header is present.
@@ -207,18 +231,22 @@ r2:               0.2083
 The following release gate remains mandatory for the exact reviewed commit accepted
 for deployment: Docker and Render must build that exact commit; a container started
 without `ACCESS_CODE` must exit nonzero; with a non-default protected `PORT`, `/health`
-must return `200` and `/` must return `303` to `/login`; and the Render Blueprint must
-validate and build successfully. Local Docker verification was unavailable on the Task
-6 workstation, so it is not a passed check and must be completed before release.
+must return `200`, `/` and `/tracker` must return `303` to `/login`, and `/api/options`
+and `/api/tracker/options` must return `401`; the built image must contain both packaged
+Parquet artifacts; and the Render Blueprint must validate and build successfully. Local
+Docker verification was unavailable on the Task 6 workstation, so it is not a passed
+check and must be completed before release.
 
 If startup reports that `ACCESS_CODE` is required, set a non-empty secret for protected
 mode or use `--no-auth` only for loopback development. If it reports a missing packaged
-dataset, restore `data/processed/game_features.parquet` from the accepted revision and
-rebuild the image. A protected page that returns to `/login` over plain HTTP is expected:
-the secure cookie requires HTTPS. A `422` from slate endpoints usually means the season,
-week, estimator, or threshold is not an available valid selection; reload `/api/options`
-and choose its advertised values. A `429` login response requires waiting for its
-`Retry-After` interval rather than repeatedly retrying.
+dataset or tracker ledger, restore `data/processed/game_features.parquet` and
+`data/processed/tracker_ledger.parquet` from the same accepted revision and rebuild the
+image. A protected page that returns to `/login` over plain HTTP is expected: the secure
+cookie requires HTTPS. A `422` from slate or tracker endpoints usually means a requested
+season, week, estimator, threshold, or record type is not an available valid selection;
+reload `/api/options` or `/api/tracker/options` and choose its advertised values. A `429`
+login response requires waiting for its `Retry-After` interval rather than repeatedly
+retrying.
 
 ### Executable Docker and Blueprint gate
 
@@ -235,7 +263,7 @@ docker build --tag "ashburn-nfl:$acceptedCommit" .
 docker run --rm --name ashburn-nfl-missing-code "ashburn-nfl:$acceptedCommit"
 if ($LASTEXITCODE -eq 0) { throw "Container started without ACCESS_CODE" }
 
-# Expected: 200; 303 with a /login redirect; 401.
+# Expected: 200; 303 with a /login redirect; 401; 303 with a /login redirect; 401.
 $container = docker run --detach --rm --name ashburn-nfl-smoke `
   -e ACCESS_CODE=local-test-only -e PORT=8765 -p 8765:8765 "ashburn-nfl:$acceptedCommit"
 try {
@@ -243,6 +271,8 @@ try {
   curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:8765/health
   curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://127.0.0.1:8765/
   curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:8765/api/options
+  curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://127.0.0.1:8765/tracker
+  curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:8765/api/tracker/options
 } finally {
   docker stop $container | Out-Null
 }
