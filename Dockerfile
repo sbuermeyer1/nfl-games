@@ -19,6 +19,7 @@ RUN python -m pip install --no-cache-dir -e . --no-deps --no-build-isolation
 
 COPY scripts ./scripts
 COPY data/processed/game_features.parquet ./data/processed/game_features.parquet
+COPY data/processed/tracker_ledger.parquet ./data/processed/tracker_ledger.parquet
 
 EXPOSE 8000
 CMD ["python", "scripts/game_app.py"]
