@@ -54,7 +54,8 @@ manual request. The rebuild includes:
 - historical rows needed for training and the fixed 2021-2025 acceptance baseline;
 - prediction-ready rows for the earliest unplayed regular-season week and the next distinct
   regular-season week;
-- as-of team ratings built from completed play-by-play strictly before each target game;
+- as-of team ratings built from completed play-by-play in weeks strictly before each target
+  week;
 - available trailing NGS values, with the existing explicit imputation behavior when current
   season data is unavailable.
 
