@@ -242,3 +242,81 @@ def test_dry_run_before_publication_window_handles_no_live_rows(
     summary = json.loads(capsys.readouterr().out)
     assert summary["live_records"] == 0
     assert summary["new_live_records"] == 0
+
+
+def invalid_schedule(case):
+    schedule = schedule_inside_publish_window()
+    if case == "empty":
+        return schedule.iloc[0:0].copy()
+    if case == "game_identity":
+        schedule.loc[:, "home_team"] = "LAR"
+        return schedule
+    full = pd.read_parquet(PROJECT_ROOT / "data/processed/schedule_2026.parquet")
+    duplicate = full.loc[full["game_id"].eq("2026_01_SF_LA")].iloc[[0]].copy()
+    duplicate.loc[:, "game_id"] = "2026_01_NE_LA"
+    duplicate.loc[:, "away_team"] = "NE"
+    duplicate.loc[:, "gameday"] = "2026-09-06"
+    duplicate.loc[:, "gametime"] = "16:00"
+    duplicate.loc[:, "result"] = float("nan")
+    duplicate.loc[:, "total"] = float("nan")
+    return pd.concat([schedule, duplicate], ignore_index=True)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("empty", "no regular-season games"),
+        ("game_identity", "team mismatch with game_id"),
+        ("duplicate_team", "team mismatch within a week"),
+    ],
+)
+def test_invalid_current_schedule_is_rejected_without_writing(
+    tmp_path, monkeypatch, case, message
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    original = ledger_path.read_bytes()
+
+    with pytest.raises(ValueError, match=message):
+        run_cli(
+            tmp_path,
+            "--write",
+            monkeypatch=monkeypatch,
+            schedule=invalid_schedule(case),
+        )
+
+    assert ledger_path.read_bytes() == original
+
+
+def test_swapped_feature_game_ids_are_rejected_without_writing(tmp_path, monkeypatch):
+    feature_path, ledger_path = write_artifacts(tmp_path)
+    features = pd.read_parquet(feature_path)
+    swapped = features["game_id"].isin([GAME_ID, "2026_01_SF_LA"])
+    features.loc[swapped, "game_id"] = features.loc[swapped, "game_id"].iloc[::-1].to_numpy()
+    features.to_parquet(feature_path, index=False)
+    original = ledger_path.read_bytes()
+
+    with pytest.raises(ValueError, match="feature identity does not match schedule"):
+        run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+
+    assert ledger_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("mutation", ["extra", "reordered"])
+def test_nonexact_ledger_schema_is_rejected_without_writing(
+    tmp_path, monkeypatch, mutation
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    ledger = pd.read_parquet(ledger_path)
+    if mutation == "extra":
+        ledger["unexpected"] = 1
+    else:
+        columns = ledger.columns.tolist()
+        columns[0], columns[1] = columns[1], columns[0]
+        ledger = ledger.loc[:, columns]
+    ledger.to_parquet(ledger_path, index=False)
+    original = ledger_path.read_bytes()
+
+    with pytest.raises(ValueError, match="ledger schema"):
+        run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+
+    assert ledger_path.read_bytes() == original

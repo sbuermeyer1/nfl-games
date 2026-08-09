@@ -14,7 +14,8 @@ from pathlib import Path
 import pandas as pd
 
 from nfl_game.data.nfl import load_schedules
-from nfl_game.data.schedule import normalize_schedule
+from nfl_game.data.schedule import ScheduleSchemaError, normalize_schedule
+from nfl_game.data.teams import normalize_team_codes
 from nfl_game.paths import PROCESSED_DIR
 from nfl_game.tracking.ledger import LEDGER_COLUMNS, validate_ledger
 from nfl_game.tracking.live import PUBLISH_BEFORE, advance_live_ledger
@@ -38,6 +39,10 @@ LEGACY_BACKTEST_MISSING_COLUMNS = {
     "current_kickoff_at",
     "void_reason",
 }
+CANONICAL_LEDGER_SCHEMA = tuple(LEDGER_COLUMNS)
+LEGACY_BACKTEST_SCHEMA = tuple(
+    column for column in LEDGER_COLUMNS if column not in LEGACY_BACKTEST_MISSING_COLUMNS
+)
 CANONICAL_TIMESTAMP_COLUMNS = {
     "published_at",
     "kickoff_at",
@@ -132,16 +137,79 @@ def _apply_voids(live: pd.DataFrame, voids: dict[str, str]) -> pd.DataFrame:
 
 def _load_ledger(path: Path) -> pd.DataFrame:
     ledger = pd.read_parquet(path)
-    missing = set(LEDGER_COLUMNS) - set(ledger.columns)
+    schema = tuple(ledger.columns)
     legacy_backtest = (
-        missing == LEGACY_BACKTEST_MISSING_COLUMNS
-        and "record_type" in ledger
+        schema == LEGACY_BACKTEST_SCHEMA
         and ledger["record_type"].eq("backtest").all()
     )
     if legacy_backtest:
         ledger = ledger.reindex(columns=LEDGER_COLUMNS)
+    elif schema != CANONICAL_LEDGER_SCHEMA:
+        raise ValueError("ledger schema must be exactly canonical or approved legacy backtest")
     validate_ledger(ledger)
     return ledger
+
+
+def _validate_current_schedule(schedule: pd.DataFrame) -> None:
+    if schedule.empty:
+        raise ScheduleSchemaError("schedule contains no regular-season games for season")
+
+    identity = schedule["game_id"].astype("string").str.extract(
+        r"^(?P<season>\d{4})_(?P<week>\d{2})_(?P<away_team>[A-Z]+)_(?P<home_team>[A-Z]+)$"
+    )
+    if identity.isna().any(axis=None):
+        raise ScheduleSchemaError("schedule contains a team mismatch with game_id")
+    identity = normalize_team_codes(identity, ["away_team", "home_team"])
+    mismatched = (
+        pd.to_numeric(identity["season"]).ne(schedule["season"].to_numpy())
+        | pd.to_numeric(identity["week"]).ne(schedule["week"].to_numpy())
+        | identity["away_team"].ne(schedule["away_team"].to_numpy())
+        | identity["home_team"].ne(schedule["home_team"].to_numpy())
+    )
+    if mismatched.any() or schedule["away_team"].eq(schedule["home_team"]).any():
+        raise ScheduleSchemaError("schedule contains a team mismatch with game_id")
+
+    appearances = pd.concat(
+        [
+            schedule[["week", "away_team"]].rename(columns={"away_team": "team"}),
+            schedule[["week", "home_team"]].rename(columns={"home_team": "team"}),
+        ],
+        ignore_index=True,
+    )
+    if appearances.duplicated(["week", "team"]).any():
+        raise ScheduleSchemaError("schedule contains a team mismatch within a week")
+
+
+def _validate_feature_schedule_identity(
+    features: pd.DataFrame, schedule: pd.DataFrame
+) -> None:
+    if schedule.empty:
+        return
+    game_ids = schedule["game_id"].astype(str).tolist()
+    selected = features.loc[features["game_id"].astype(str).isin(game_ids)]
+    if len(selected) != len(game_ids) or set(selected["game_id"].astype(str)) != set(game_ids):
+        raise ValueError("feature identity does not match schedule")
+
+    feature_identity = (
+        selected.set_index(selected["game_id"].astype(str))
+        .loc[game_ids, ["season", "week", "away_team", "home_team"]]
+        .reset_index(drop=True)
+    )
+    schedule_identity = schedule[
+        ["season", "week", "away_team", "home_team"]
+    ].reset_index(drop=True)
+    mismatched = (
+        feature_identity["season"].astype(int).ne(schedule_identity["season"].astype(int))
+        | feature_identity["week"].astype(int).ne(schedule_identity["week"].astype(int))
+        | feature_identity["away_team"].astype(str).ne(
+            schedule_identity["away_team"].astype(str)
+        )
+        | feature_identity["home_team"].astype(str).ne(
+            schedule_identity["home_team"].astype(str)
+        )
+    )
+    if mismatched.any():
+        raise ValueError("feature identity does not match schedule")
 
 
 def _select_schedule(schedule: pd.DataFrame, live: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
@@ -153,6 +221,7 @@ def _select_schedule(schedule: pd.DataFrame, live: pd.DataFrame, now: pd.Timesta
 
 def _new_predictions(
     service: SlateService,
+    features: pd.DataFrame,
     schedule: pd.DataFrame,
     live: pd.DataFrame,
     season: int,
@@ -161,6 +230,7 @@ def _new_predictions(
     unpublished = schedule.loc[~schedule["game_id"].astype(str).isin(existing_ids)]
     if unpublished.empty:
         return pd.DataFrame(columns=PREDICTION_COLUMNS)
+    _validate_feature_schedule_identity(features, unpublished)
 
     predictions = []
     for week in sorted(int(value) for value in unpublished["week"].unique()):
@@ -252,8 +322,11 @@ def main(argv=None, loader=None, now=None) -> int:
     existing_live = _apply_voids(existing_live, voids)
     raw_schedule = schedule_loader([args.season], save=False)
     schedule = normalize_schedule(raw_schedule, args.season)
+    _validate_current_schedule(schedule)
     selected_schedule = _select_schedule(schedule, existing_live, current)
-    predictions = _new_predictions(service, selected_schedule, existing_live, args.season)
+    predictions = _new_predictions(
+        service, features, selected_schedule, existing_live, args.season
+    )
     advanced_live = advance_live_ledger(
         existing_live,
         selected_schedule,
