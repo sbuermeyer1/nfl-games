@@ -137,6 +137,7 @@ def test_delayed_old_waiter_cannot_overwrite_a_newer_refresh(schedule_fixture):
 
 def test_cold_timeout_keeps_future_registered_for_later_consumption(schedule_fixture):
     started = Event()
+    completed = Event()
     release = Event()
     calls = []
 
@@ -150,8 +151,12 @@ def test_cold_timeout_keeps_future_registered_for_later_consumption(schedule_fix
     with pytest.raises(MarketUnavailableError, match="market feed unavailable"):
         provider.snapshot(2026)
     assert started.wait(timeout=1)
+    registered = provider._futures[2026]
+    registered.add_done_callback(lambda _future: completed.set())
 
     release.set()
+    assert completed.wait(timeout=1)
+    assert provider._futures[2026] is registered
     snapshot = provider.snapshot(2026)
 
     assert calls == [[2026]]
