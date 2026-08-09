@@ -454,6 +454,7 @@ git commit -m "feat: rate explicit scheduled weeks"
 - Create: `data/processed/schedule_2026.parquet`
 - Modify: `scripts/build_dataset.py`
 - Modify: `data/processed/game_features.parquet`
+- Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: frozen historical `game_features.parquet`, normalized 2026 schedule rows, team-game EPA history, available 2026 NGS rows, and an explicit UTC clock.
@@ -607,12 +608,12 @@ Expected: tests pass and the two dry runs report identical digests without modif
 git diff --stat -- data/processed/game_features.parquet data/processed/schedule_2026.parquet
 ```
 
-Expected: the write creates the complete normalized 2026 schedule plus only the active two prediction weeks; the following dry run reports identical digests. Record schedule rows, unique game IDs, active weeks, feature rows by season, and null market counts for the task review.
+Expected: the write creates the complete normalized 2026 schedule plus only the active two prediction weeks; the following dry run reports identical digests. Record schedule rows, unique game IDs, active weeks, feature rows by season, and null market counts for the task review. Add `!data/processed/schedule_2026.parquet` to `.gitignore` before staging so the new artifact is tracked explicitly.
 
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add src/nfl_game/pipeline scripts/refresh_2026.py scripts/build_dataset.py tests/test_refresh_2026.py data/processed/game_features.parquet data/processed/schedule_2026.parquet
+git add src/nfl_game/pipeline scripts/refresh_2026.py scripts/build_dataset.py tests/test_refresh_2026.py data/processed/game_features.parquet data/processed/schedule_2026.parquet .gitignore
 git commit -m "feat: build deterministic 2026 artifacts"
 ```
 
@@ -1639,7 +1640,6 @@ git commit -m "feat: show official 2026 live records"
 - Modify: `src/nfl_game/web/runtime.py`
 - Modify: `scripts/game_app.py`
 - Modify: `tests/test_web_runtime.py`
-- Modify: `.gitignore`
 - Modify: `.dockerignore`
 - Modify: `Dockerfile`
 
@@ -1701,12 +1701,9 @@ Update `scripts/game_app.py` to pass the schedule path.
 
 - [ ] **Step 4: Package the schedule artifact**
 
-Add exact exceptions:
+Add the exact Docker build-context exception (the repository ignore exception was already added in Task 3):
 
 ```text
-# .gitignore
-!data/processed/schedule_2026.parquet
-
 # .dockerignore
 !data/processed/schedule_2026.parquet
 ```
@@ -1809,7 +1806,7 @@ Expected: the pinned actionlint release reports no findings, and Docker succeeds
 - [ ] **Step 8: Commit**
 
 ```powershell
-git add .github/workflows/refresh-2026-model.yml .github/workflows/update-2026-tracker.yml src/nfl_game/web/runtime.py scripts/game_app.py tests/test_web_runtime.py .gitignore .dockerignore Dockerfile
+git add .github/workflows/refresh-2026-model.yml .github/workflows/update-2026-tracker.yml src/nfl_game/web/runtime.py scripts/game_app.py tests/test_web_runtime.py .dockerignore Dockerfile
 git commit -m "ci: automate 2026 model and tracker data"
 ```
 
