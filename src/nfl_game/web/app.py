@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from nfl_game.web.auth import AccessCodeMiddleware
 from nfl_game.web.login import add_login_routes
+from nfl_game.web.schedule_page import SCHEDULE_PAGE
 from nfl_game.web.service import (
     DEFAULT_EDGE_THRESHOLD,
     SlateInputError,
@@ -41,7 +42,10 @@ PAGE = """<!doctype html>
   .note { color: #555; font-size: .9rem; }
 </style>
 <main>
-  <nav aria-label="Site navigation"><a href="/tracker">Performance tracker</a></nav>
+  <nav aria-label="Site navigation">
+    <a href="/schedule">2026 schedule</a>
+    <a href="/tracker">Performance tracker</a>
+  </nav>
   <h1>NFL Game Model</h1>
   <p>Weekly model-versus-market margins and totals.</p>
   <div class="controls">
@@ -53,6 +57,7 @@ PAGE = """<!doctype html>
     <button id="download" type="button">Download CSV</button>
   </div>
   <p id="message" role="status"></p>
+  <p id="market-message" role="status" aria-live="polite"></p>
   <div class="table-wrap"><table id="results"></table></div>
   <p class="note">Spreads are home-team margins. An edge flag shows model/market
   disagreement and is not betting advice.</p>
@@ -65,6 +70,7 @@ const edge = document.getElementById('edge');
 const runButton = document.getElementById('run');
 const downloadButton = document.getElementById('download');
 const message = document.getElementById('message');
+const marketMessage = document.getElementById('market-message');
 const results = document.getElementById('results');
 let latestWeekRequest = 0;
 let latestSlateRequest = 0;
@@ -104,13 +110,25 @@ async function jsonOrError(url) {
 }
 
 function formatted(value, kind) {
-  if (value === null || value === undefined) return 'n/a';
-  if (kind === 'probability') return `${(Number(value) * 100).toFixed(1)}%`;
+  if (value === null || value === undefined || value === '') return '\u2014';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '\u2014';
+  if (kind === 'probability') return `${(number * 100).toFixed(1)}%`;
   if (kind === 'signed') {
-    const number = Number(value);
     return `${number >= 0 ? '+' : ''}${number.toFixed(1)}`;
   }
-  return Number(value).toFixed(1);
+  return number.toFixed(1);
+}
+
+function renderMarket(market) {
+  if (!market) {
+    marketMessage.textContent = '';
+    return;
+  }
+  const observedAt = market.observed_at || '\u2014';
+  marketMessage.textContent = market.stale
+    ? `Warning: market lines are stale. Last observed ${observedAt}`
+    : `Lines updated ${observedAt}`;
 }
 
 function renderGames(games) {
@@ -151,6 +169,7 @@ function invalidateSlate(runAvailable = true) {
   renderedSlateQuery = null;
   results.replaceChildren();
   message.textContent = '';
+  marketMessage.textContent = '';
   downloadButton.disabled = true;
   runButton.disabled = !runAvailable;
 }
@@ -177,16 +196,19 @@ async function runSlate() {
   downloadButton.disabled = true;
   runButton.disabled = true;
   message.textContent = 'Loading...';
+  marketMessage.textContent = '';
   try {
     const body = await jsonOrError(`/api/slate?${query}`);
     if (request !== latestSlateRequest || query !== queryString()) return;
     renderGames(body.games);
+    renderMarket(body.market);
     renderedSlateQuery = query;
     downloadButton.disabled = false;
     message.textContent = `${body.games.length} games`;
   } catch (error) {
     if (request !== latestSlateRequest || query !== queryString()) return;
     results.replaceChildren();
+    marketMessage.textContent = '';
     message.textContent = error.message;
   } finally {
     if (request === latestSlateRequest && query === queryString()) {
@@ -267,6 +289,10 @@ def create_app(
     def index():
         return PAGE
 
+    @app.get("/schedule", response_class=HTMLResponse)
+    def schedule_page():
+        return SCHEDULE_PAGE
+
     @app.get("/tracker", response_class=HTMLResponse)
     def tracker():
         return TRACKER_PAGE
@@ -282,6 +308,10 @@ def create_app(
     @app.get("/api/weeks")
     def weeks(season: int):
         return {"weeks": service.weeks(season)}
+
+    @app.get("/api/schedule")
+    def schedule(season: int = 2026):
+        return service.schedule_records(season)
 
     @app.get("/api/tracker/options")
     def tracker_options():

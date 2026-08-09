@@ -99,6 +99,29 @@ class FakeService:
         writer.writerows(rows)
         return output.getvalue()
 
+    def schedule_records(self, season):
+        self.calls.append(("schedule_records", season))
+        return {
+            "season": season,
+            "games": [
+                {
+                    "game_id": f"{season}_01_AAA_BBB",
+                    "season": season,
+                    "week": 1,
+                    "kickoff_at": "2026-09-01T17:00:00+00:00",
+                    "away_team": "AAA",
+                    "home_team": "BBB",
+                    "spread_line": 2.5,
+                    "total_line": None,
+                }
+            ],
+            "market": {
+                "source": "nflverse",
+                "observed_at": "2026-09-01T12:00:00+00:00",
+                "stale": False,
+            },
+        }
+
 
 class FakeTrackerService:
     def __init__(self):
@@ -190,12 +213,13 @@ class Element {
 }
 
 const nodes = Object.fromEntries(
-  ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'results']
+  ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'market-message', 'results']
     .map(id => [id, new Element(id === 'edge' ? 'input' : 'select')])
 );
 nodes.run.tagName = 'button';
 nodes.download.tagName = 'button';
 nodes.message.tagName = 'p';
+nodes['market-message'].tagName = 'p';
 nodes.results.tagName = 'table';
 
 globalThis.document = {
@@ -263,6 +287,7 @@ eval(input.script);
     unhandled,
     location: window.location,
     message: nodes.message.textContent,
+    marketMessage: nodes['market-message'].textContent,
     rows,
     season: { value: nodes.season.value, options: options('season') },
     week: { value: nodes.week.value, options: options('week') },
@@ -319,7 +344,12 @@ def standard_responses():
                         "over_prob": None,
                         "edge_flag": 1,
                     }
-                ]
+                ],
+                "market": {
+                    "source": "nflverse",
+                    "observed_at": "2026-09-01T12:00:00+00:00",
+                    "stale": False,
+                },
             }
         ),
     }
@@ -346,12 +376,29 @@ def test_dashboard_initializes_selectors_and_renders_safe_game_values():
             "+1.5",
             "55.0%",
             "46.0",
-            "n/a",
-            "n/a",
-            "n/a",
+            "\N{EM DASH}",
+            "\N{EM DASH}",
+            "\N{EM DASH}",
             "*",
         ],
     }
+    assert state["marketMessage"] == "Lines updated 2026-09-01T12:00:00+00:00"
+
+
+def test_dashboard_warns_when_market_data_is_stale():
+    """Catch packaged fallback lines being presented as current market data."""
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+    responses[slate_url]["body"]["market"] = {
+        "source": "packaged",
+        "observed_at": "2026-09-01T12:00:00+00:00",
+        "stale": True,
+    }
+
+    state = dashboard_state(client(), responses, initialize_actions())
+
+    assert "stale" in state["marketMessage"].lower()
+    assert "2026-09-01T12:00:00+00:00" in state["marketMessage"]
 
 
 def test_dashboard_loading_message_is_ascii_safe():
@@ -598,6 +645,29 @@ def test_tracker_routes_forward_exact_selections_and_link_from_slate():
         ("summary", "backtest", "all"),
         ("records", "backtest", 2025),
     ]
+
+
+def test_schedule_page_and_api_are_protected_and_use_service():
+    """Catch an unprotected or disconnected 2026 schedule page/API pair."""
+    service = FakeService()
+    http_client = client(service)
+
+    assert http_client.get("/schedule").status_code == 200
+    body = http_client.get("/api/schedule", params={"season": 2026}).json()
+
+    assert body["season"] == 2026
+    assert body["games"][0]["game_id"].startswith("2026_")
+    assert body["market"]["source"] in {"nflverse", "packaged"}
+    assert service.calls == [("schedule_records", 2026)]
+
+    protected = client(access_code="letmein")
+    page = protected.get("/schedule")
+    api = protected.get("/api/schedule", params={"season": 2026})
+
+    assert page.status_code == 303
+    assert page.headers["location"] == "/login"
+    assert api.status_code == 401
+    assert api.json() == {"error": "session expired"}
 
 
 def test_tracker_input_errors_are_client_safe_422s():
