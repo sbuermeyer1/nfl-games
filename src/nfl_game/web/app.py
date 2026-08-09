@@ -302,7 +302,7 @@ def create_app(
         estimator: str = "ridge",
         edge_threshold: float = Query(DEFAULT_EDGE_THRESHOLD),
     ):
-        return {"games": service.records(season, week, estimator, edge_threshold)}
+        return service.payload(season, week, estimator, edge_threshold)
 
     @app.get("/api/slate.csv")
     def slate_csv(

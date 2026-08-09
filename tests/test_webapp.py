@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import math
 import re
@@ -47,6 +49,17 @@ class FakeService:
         if not math.isfinite(edge_threshold) or edge_threshold < 0:
             raise SlateInputError("edge threshold must be a finite non-negative number")
 
+    def payload(self, season, week, estimator, edge_threshold):
+        self.calls.append(("payload", season, week, estimator, edge_threshold))
+        return {
+            "games": self.records(season, week, estimator, edge_threshold),
+            "market": {
+                "source": "nflverse",
+                "observed_at": "2026-09-01T12:00:00+00:00",
+                "stale": False,
+            },
+        }
+
     def records(self, season, week, estimator, edge_threshold):
         self.calls.append(("records", season, week, estimator, edge_threshold))
         self._validate(estimator, edge_threshold)
@@ -79,8 +92,12 @@ class FakeService:
 
     def csv(self, season, week, estimator, edge_threshold):
         self.calls.append(("csv", season, week, estimator, edge_threshold))
-        self.records(season, week, estimator, edge_threshold)
-        return f"game_id,season,week\n2025_01_AAA_BBB,{season},{week}\n"
+        rows = self.records(season, week, estimator, edge_threshold)
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue()
 
 
 class FakeTrackerService:
@@ -613,18 +630,30 @@ def test_slate_defaults_and_csv_forward_matching_arguments_and_content():
     http_client = client(service)
 
     slate = http_client.get("/api/slate", params={"season": 2025, "week": 1})
-    csv = http_client.get("/api/slate.csv", params={"season": 2025, "week": 1})
+    csv_response = http_client.get("/api/slate.csv", params={"season": 2025, "week": 1})
 
     assert slate.status_code == 200
-    assert csv.status_code == 200
+    assert csv_response.status_code == 200
+    assert set(slate.json()) == {"games", "market"}
+    assert slate.json()["market"] == {
+        "source": "nflverse",
+        "observed_at": "2026-09-01T12:00:00+00:00",
+        "stale": False,
+    }
     assert service.calls == [
+        ("payload", 2025, 1, "ridge", 2.0),
         ("records", 2025, 1, "ridge", 2.0),
         ("csv", 2025, 1, "ridge", 2.0),
         ("records", 2025, 1, "ridge", 2.0),
     ]
-    assert csv.text == "game_id,season,week\n2025_01_AAA_BBB,2025,1\n"
-    assert csv.headers["content-type"].startswith("text/csv")
-    assert csv.headers["content-disposition"] == 'attachment; filename="slate_2025_wk01_ridge.csv"'
+    csv_game = next(csv.DictReader(io.StringIO(csv_response.text)))
+    json_game = slate.json()["games"][0]
+    assert csv_game == {
+        key: "" if value is None else str(value) for key, value in json_game.items()
+    }
+    assert csv_game["market_total"] == ""
+    assert csv_response.headers["content-type"].startswith("text/csv")
+    assert csv_response.headers["content-disposition"] == 'attachment; filename="slate_2025_wk01_ridge.csv"'
 
 
 @pytest.mark.parametrize("path", ["/api/slate", "/api/slate.csv"])

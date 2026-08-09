@@ -1,10 +1,12 @@
 import csv
 import io
 import math
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 
+from nfl_game.market.live import MarketSnapshot, MarketUnavailableError
 from nfl_game.model.features import FEATURE_COLS
 from nfl_game.model.predict import DEFAULT_ALPHA
 from nfl_game.web.service import (
@@ -33,6 +35,73 @@ def feature_rows() -> pd.DataFrame:
             )
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def feature_rows_with_2026_weeks(weeks=(1, 2)) -> pd.DataFrame:
+    rows = feature_rows()
+    additions = []
+    for week in weeks:
+        row = {column: 0.1 for column in FEATURE_COLS}
+        row.update(
+            game_id=f"2026_{week:02d}_AAA_BBB",
+            season=2026,
+            week=week,
+            away_team="AAA",
+            home_team="BBB",
+            spread_line=2.5,
+            total_line=44.5,
+            margin=float("nan"),
+            total_points=float("nan"),
+        )
+        additions.append(row)
+    return pd.concat([rows, pd.DataFrame(additions)], ignore_index=True)
+
+
+FIXED_NOW = datetime(2026, 9, 1, 12, tzinfo=UTC)
+
+
+def packaged_schedule(weeks=(1, 2)) -> pd.DataFrame:
+    rows = []
+    for week in weeks:
+        rows.append(
+            {
+                "game_id": f"2026_{week:02d}_AAA_BBB",
+                "season": 2026,
+                "week": week,
+                "away_team": "AAA",
+                "home_team": "BBB",
+                "spread_line": 2.5,
+                "total_line": 44.5,
+                "kickoff_at": pd.Timestamp(f"2026-09-{10 + week:02d}T17:00:00Z"),
+                "result": float("nan"),
+                "total": float("nan"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def market_snapshot(
+    *, spread_line=4.5, total_line=47.0, observed_at="2026-09-01T12:00:00Z"
+):
+    rows = packaged_schedule((1,))
+    rows.loc[0, "spread_line"] = spread_line
+    rows.loc[0, "total_line"] = total_line
+    return MarketSnapshot(rows=rows, observed_at=pd.Timestamp(observed_at).to_pydatetime())
+
+
+class FakeProvider:
+    def __init__(self, snapshot):
+        self.value = snapshot
+        self.calls = []
+
+    def snapshot(self, season):
+        self.calls.append(season)
+        return self.value
+
+
+class FailingProvider:
+    def snapshot(self, season):
+        raise MarketUnavailableError("market feed unavailable")
 
 
 def test_options_default_to_latest_packaged_week():
@@ -230,6 +299,17 @@ def fake_fitted_service(monkeypatch, spread_line=2.5, total_line=44.5):
     return service, calls
 
 
+def fake_fitted_2026_service(monkeypatch, provider=None):
+    _, calls = fake_fitted_service(monkeypatch)
+    service = SlateService(
+        feature_rows_with_2026_weeks(),
+        packaged_schedule=packaged_schedule(),
+        market_provider=provider,
+        clock=lambda: FIXED_NOW,
+    )
+    return service, calls
+
+
 def test_reuses_bundle_across_weeks(monkeypatch):
     service = SlateService(feature_rows())
     calls = {"fit": 0}
@@ -393,3 +473,91 @@ def test_raises_not_found_when_a_valid_slate_has_no_model_rows(monkeypatch):
     monkeypatch.setattr(service, "_bundle", lambda season, estimator: EmptyBundle())
     with pytest.raises(SlateNotFoundError, match="no games are available"):
         service.slate(2025, 1, "ridge", 2.0)
+
+
+def test_options_default_to_earliest_unplayed_2026_week():
+    service = SlateService(
+        feature_rows_with_2026_weeks(),
+        packaged_schedule=packaged_schedule(),
+        clock=lambda: FIXED_NOW,
+    )
+
+    options = service.options()
+
+    assert options["latest"] == {"season": 2026, "week": 1}
+    assert options["weeks"] == [1, 2]
+
+
+def test_payload_overlays_live_markets_without_changing_model_predictions(monkeypatch):
+    provider = FakeProvider(market_snapshot(spread_line=4.5, total_line=47.0))
+    service, _ = fake_fitted_2026_service(monkeypatch, provider)
+
+    raw_predictions = service.model_predictions(2026, 1, "ridge")
+    body = service.payload(2026, 1, "ridge", 2.0)
+
+    assert raw_predictions.loc[0, "model_margin"] == 4.0
+    assert provider.calls == [2026]
+    assert body["games"][0]["model_spread"] == 4.0
+    assert body["games"][0]["market_spread"] == 4.5
+    assert body["games"][0]["market_total"] == 47.0
+    assert body["market"] == {
+        "source": "nflverse",
+        "observed_at": "2026-09-01T12:00:00+00:00",
+        "stale": False,
+    }
+
+
+def test_successful_feed_missing_one_market_does_not_use_packaged_value(monkeypatch):
+    provider = FakeProvider(market_snapshot(spread_line=None, total_line=47.0))
+    service, _ = fake_fitted_2026_service(monkeypatch, provider)
+
+    game = service.payload(2026, 1, "ridge", 2.0)["games"][0]
+
+    assert game["market_spread"] is None
+    assert game["spread_market_status"] == "missing"
+    assert game["market_total"] == 47.0
+    assert game["total_market_status"] == "live"
+
+
+def test_cold_feed_failure_uses_packaged_lines_as_stale(monkeypatch):
+    service, _ = fake_fitted_2026_service(monkeypatch, FailingProvider())
+
+    body = service.payload(2026, 1, "ridge", 2.0)
+
+    assert body["market"]["source"] == "packaged"
+    assert body["market"]["stale"] is True
+    assert body["games"][0]["market_spread"] == 2.5
+    assert body["games"][0]["spread_market_status"] == "stale"
+
+
+def test_csv_uses_one_market_snapshot_and_blanks_missing_live_values(monkeypatch):
+    provider = FakeProvider(market_snapshot(spread_line=None, total_line=47.0))
+    service, _ = fake_fitted_2026_service(monkeypatch, provider)
+
+    csv_rows = list(csv.DictReader(io.StringIO(service.csv(2026, 1, "ridge", 2.0))))
+
+    assert provider.calls == [2026]
+    assert csv_rows[0]["market_spread"] == ""
+    assert csv_rows[0]["spread_market_status"] == "missing"
+    assert csv_rows[0]["market_total"] == "47.0"
+
+
+def test_market_snapshot_team_identity_must_match_features(monkeypatch):
+    snapshot = market_snapshot()
+    snapshot.rows.loc[0, "home_team"] = "CCC"
+    service, _ = fake_fitted_2026_service(monkeypatch, FakeProvider(snapshot))
+
+    with pytest.raises(SlateUnavailableError, match="identity"):
+        service.payload(2026, 1, "ridge", 2.0)
+
+
+def test_schedule_records_uses_one_snapshot_and_json_safe_lines(monkeypatch):
+    provider = FakeProvider(market_snapshot(spread_line=None))
+    service, _ = fake_fitted_2026_service(monkeypatch, provider)
+
+    body = service.schedule_records(2026)
+
+    assert provider.calls == [2026]
+    assert body["season"] == 2026
+    assert body["games"][0]["spread_line"] is None
+    assert body["market"]["source"] == "nflverse"

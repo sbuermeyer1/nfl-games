@@ -3,13 +3,16 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from numbers import Real
 from pathlib import Path
 
 import pandas as pd
 
 from nfl_game.backtest import walk_forward
+from nfl_game.data.schedule import is_final_game
 from nfl_game.market.compare import build_slate
+from nfl_game.market.live import MarketSnapshot, MarketUnavailableError
 from nfl_game.model.calibrate import Calibrator
 from nfl_game.model.features import FEATURE_COLS
 from nfl_game.model.predict import (
@@ -35,6 +38,16 @@ REQUIRED_COLUMNS = {
 IDENTITY_COLUMNS = ("game_id", "away_team", "home_team")
 SELECTOR_COLUMNS = ("season", "week")
 LINE_TARGET_COLUMNS = ("spread_line", "total_line", "margin", "total_points")
+MARKET_COLUMNS = {
+    "game_id",
+    "season",
+    "week",
+    "away_team",
+    "home_team",
+    "spread_line",
+    "total_line",
+}
+SCHEDULE_STATE_COLUMNS = {"kickoff_at", "result", "total"}
 
 
 class SlateInputError(ValueError):
@@ -108,7 +121,13 @@ def _validate_dataset_values(features: pd.DataFrame) -> None:
 
 
 class SlateService:
-    def __init__(self, features: pd.DataFrame):
+    def __init__(
+        self,
+        features: pd.DataFrame,
+        packaged_schedule: pd.DataFrame | None = None,
+        market_provider=None,
+        clock=lambda: datetime.now(UTC),
+    ):
         missing = sorted(REQUIRED_COLUMNS - set(features.columns))
         if missing:
             raise ValueError(f"game features missing required columns: {missing}")
@@ -118,12 +137,28 @@ class SlateService:
         if features["game_id"].duplicated().any():
             raise ValueError("game features contain duplicate game_id values")
         self._features = features.copy()
+        schedule = features if packaged_schedule is None else packaged_schedule
+        missing_market = sorted(MARKET_COLUMNS - set(schedule.columns))
+        if missing_market:
+            raise ValueError(f"packaged schedule missing required columns: {missing_market}")
+        if schedule["game_id"].duplicated().any():
+            raise ValueError("packaged schedule contains duplicate game_id values")
+        self._packaged_schedule = schedule.copy()
+        self._market_provider = market_provider
+        self._clock = clock
+        self._packaged_observed_at = clock()
         self._cache: dict[tuple[int, str], ModelBundle] = {}
         self._cache_lock = threading.Lock()
 
     @classmethod
-    def from_parquet(cls, path: str | Path) -> SlateService:
-        return cls(pd.read_parquet(path))
+    def from_parquet(
+        cls,
+        path: str | Path,
+        packaged_schedule: pd.DataFrame | None = None,
+        market_provider=None,
+        clock=lambda: datetime.now(UTC),
+    ) -> SlateService:
+        return cls(pd.read_parquet(path), packaged_schedule, market_provider, clock)
 
     def weeks(self, season: int) -> list[int]:
         seasons = {int(value) for value in self._features["season"].unique()}
@@ -136,13 +171,27 @@ class SlateService:
         seasons = sorted(int(value) for value in self._features["season"].unique())
         latest_season = seasons[-1]
         weeks = self.weeks(latest_season)
+        latest_week = weeks[-1]
+        schedule = self._packaged_schedule.loc[
+            self._packaged_schedule["season"].eq(latest_season)
+        ]
+        if SCHEDULE_STATE_COLUMNS.issubset(schedule.columns):
+            unplayed_weeks = sorted(
+                {
+                    int(row["week"])
+                    for _, row in schedule.iterrows()
+                    if int(row["week"]) in weeks and not is_final_game(row, self._clock())
+                }
+            )
+            if unplayed_weeks:
+                latest_week = unplayed_weeks[0]
         return {
             "seasons": seasons,
             "weeks": weeks,
             "estimators": sorted(ESTIMATORS),
             "default_estimator": "ridge",
             "default_edge_threshold": DEFAULT_EDGE_THRESHOLD,
-            "latest": {"season": latest_season, "week": weeks[-1]},
+            "latest": {"season": latest_season, "week": latest_week},
         }
 
     def _validate(self, season: int, week: int, estimator: str, edge_threshold: float) -> None:
@@ -190,19 +239,110 @@ class SlateService:
                 self._cache[key] = bundle
             return bundle
 
-    def slate(
+    def _target(self, season: int, week: int) -> pd.DataFrame:
+        target = self._features[
+            (self._features["season"] == season) & (self._features["week"] == week)
+        ].copy()
+        if target.empty:
+            raise SlateInputError(f"week {week} is not available for season {season}")
+        return target
+
+    def model_predictions(
+        self, season: int, week: int, estimator: str = "ridge"
+    ) -> pd.DataFrame:
+        self._validate(season, week, estimator, DEFAULT_EDGE_THRESHOLD)
+        return self._bundle(season, estimator).model.predict(self._target(season, week))
+
+    def _market_snapshot(self, season: int) -> MarketSnapshot:
+        if self._market_provider is not None:
+            try:
+                return self._market_provider.snapshot(season)
+            except MarketUnavailableError:
+                pass
+        rows = self._packaged_schedule.loc[
+            self._packaged_schedule["season"].eq(season)
+        ].copy()
+        return MarketSnapshot(
+            rows=rows,
+            observed_at=self._packaged_observed_at,
+            source="packaged",
+            stale=True,
+        )
+
+    @staticmethod
+    def _market_metadata(snapshot: MarketSnapshot) -> dict:
+        observed_at = pd.Timestamp(snapshot.observed_at)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.tz_localize(UTC)
+        else:
+            observed_at = observed_at.tz_convert(UTC)
+        return {
+            "source": snapshot.source,
+            "observed_at": observed_at.isoformat(),
+            "stale": bool(snapshot.stale),
+        }
+
+    @staticmethod
+    def _json_records(frame: pd.DataFrame) -> list[dict]:
+        clean = frame.astype(object).where(pd.notna(frame), None)
+        records = clean.to_dict(orient="records")
+        for record in records:
+            for key, value in record.items():
+                if isinstance(value, (datetime, pd.Timestamp)):
+                    timestamp = pd.Timestamp(value)
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.tz_localize(UTC)
+                    record[key] = timestamp.isoformat()
+        return records
+
+    def _overlay_market(
+        self, target: pd.DataFrame, snapshot: MarketSnapshot
+    ) -> pd.DataFrame:
+        missing = sorted(MARKET_COLUMNS - set(snapshot.rows.columns))
+        if missing:
+            raise SlateUnavailableError(f"market snapshot missing required columns: {missing}")
+        market = snapshot.rows.loc[
+            snapshot.rows["season"].eq(int(target["season"].iloc[0]))
+            & snapshot.rows["week"].eq(int(target["week"].iloc[0])),
+            list(MARKET_COLUMNS),
+        ].copy()
+        if market["game_id"].duplicated().any():
+            raise SlateUnavailableError("market snapshot identity contains duplicate game_id")
+        target_ids = set(target["game_id"])
+        if set(market["game_id"]) != target_ids:
+            raise SlateUnavailableError("market snapshot identity does not match slate games")
+
+        market = market.set_index("game_id").loc[target["game_id"]]
+        if (
+            market["away_team"].to_numpy() != target["away_team"].to_numpy()
+        ).any() or (
+            market["home_team"].to_numpy() != target["home_team"].to_numpy()
+        ).any():
+            raise SlateUnavailableError("market snapshot identity does not match slate teams")
+
+        overlaid = target.copy()
+        try:
+            overlaid["spread_line"] = pd.to_numeric(
+                market["spread_line"], errors="raise"
+            ).to_numpy()
+            overlaid["total_line"] = pd.to_numeric(
+                market["total_line"], errors="raise"
+            ).to_numpy()
+        except (TypeError, ValueError) as exc:
+            raise SlateUnavailableError("market snapshot contains invalid lines") from exc
+        return overlaid
+
+    def _slate_result(
         self,
         season: int,
         week: int,
-        estimator: str = "ridge",
-        edge_threshold: float = DEFAULT_EDGE_THRESHOLD,
-    ) -> pd.DataFrame:
+        estimator: str,
+        edge_threshold: float,
+    ) -> tuple[pd.DataFrame, dict]:
         self._validate(season, week, estimator, edge_threshold)
-        target = self._features[
-            (self._features["season"] == season) & (self._features["week"] == week)
-        ]
-        if target.empty:
-            raise SlateInputError(f"week {week} is not available for season {season}")
+        target = self._target(season, week)
+        snapshot = self._market_snapshot(season)
+        target = self._overlay_market(target, snapshot)
         bundle = self._bundle(season, estimator)
         preds = bundle.model.predict(target)
         probs_input = target.merge(preds, on="game_id", validate="one_to_one")
@@ -210,11 +350,51 @@ class SlateService:
         slate = build_slate(target, preds, probs, edge_threshold=edge_threshold)
         if slate.empty:
             raise SlateNotFoundError(f"no games are available for season {season} week {week}")
+
+        available_status = "stale" if snapshot.stale else "live"
+        slate["spread_market_status"] = slate["market_spread"].map(
+            lambda value: "missing" if pd.isna(value) else available_status
+        )
+        slate["total_market_status"] = slate["market_total"].map(
+            lambda value: "missing" if pd.isna(value) else available_status
+        )
+        return slate, self._market_metadata(snapshot)
+
+    def slate(
+        self,
+        season: int,
+        week: int,
+        estimator: str = "ridge",
+        edge_threshold: float = DEFAULT_EDGE_THRESHOLD,
+    ) -> pd.DataFrame:
+        slate, _ = self._slate_result(season, week, estimator, edge_threshold)
         return slate
 
+    def payload(
+        self,
+        season: int,
+        week: int,
+        estimator: str = "ridge",
+        edge_threshold: float = DEFAULT_EDGE_THRESHOLD,
+    ) -> dict:
+        slate, metadata = self._slate_result(season, week, estimator, edge_threshold)
+        return {"games": self._json_records(slate), "market": metadata}
+
     def records(self, *args, **kwargs) -> list[dict]:
-        slate = self.slate(*args, **kwargs).astype(object)
-        return slate.where(pd.notna(slate), None).to_dict(orient="records")
+        slate, _ = self._slate_result(*args, **kwargs)
+        return self._json_records(slate)
 
     def csv(self, *args, **kwargs) -> str:
-        return self.slate(*args, **kwargs).to_csv(index=False, na_rep="")
+        slate, _ = self._slate_result(*args, **kwargs)
+        return slate.to_csv(index=False, na_rep="")
+
+    def schedule_records(self, season: int) -> dict:
+        snapshot = self._market_snapshot(season)
+        rows = snapshot.rows.loc[snapshot.rows["season"].eq(season)].copy()
+        if rows.empty:
+            raise SlateInputError(f"season {season} is not available")
+        return {
+            "season": season,
+            "games": self._json_records(rows),
+            "market": self._market_metadata(snapshot),
+        }
