@@ -68,14 +68,33 @@ def build_ratings(
     return out.reset_index(drop=True)
 
 
+def ratings_for_targets(
+    team_games: pd.DataFrame,
+    targets: list[tuple[int, int]],
+    **kwargs,
+) -> pd.DataFrame:
+    """Build leak-free ratings for the supplied scheduled season-week targets."""
+    frames = []
+    for season, week in sorted(set(targets)):
+        ratings = build_ratings(
+            team_games,
+            asof_season=int(season),
+            asof_week=int(week),
+            **kwargs,
+        )
+        ratings.insert(0, "week", int(week))
+        ratings.insert(0, "season", int(season))
+        frames.append(ratings)
+    if not frames:
+        return pd.DataFrame(columns=["season", "week", "team"])
+    return pd.concat(frames, ignore_index=True)
+
+
 def ratings_by_week(team_games: pd.DataFrame, seasons: list[int], **kwargs) -> pd.DataFrame:
     """Stack build_ratings across every week of every requested season."""
-    frames = []
-    for season in seasons:
-        weeks = sorted(team_games.loc[team_games["season"] == season, "week"].unique())
-        for week in weeks:
-            r = build_ratings(team_games, asof_season=season, asof_week=int(week), **kwargs)
-            r.insert(0, "week", int(week))
-            r.insert(0, "season", season)
-            frames.append(r)
-    return pd.concat(frames, ignore_index=True)
+    targets = [
+        (season, int(week))
+        for season in seasons
+        for week in sorted(team_games.loc[team_games["season"] == season, "week"].unique())
+    ]
+    return ratings_for_targets(team_games, targets, **kwargs)

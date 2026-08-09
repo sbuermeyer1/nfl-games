@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -257,3 +258,25 @@ def test_future_games_kept_with_null_targets():
     out = build_game_features(sched, _ratings(), _ngs()).set_index("game_id")
     assert pd.isna(out.loc["2024_02_KC_BUF", "margin"])
     assert out.loc["2024_02_KC_BUF", FEATURE_COLS].notna().all()
+
+
+def test_future_2026_games_with_lines_keep_finite_features_and_null_targets():
+    """Scheduled games retain model features while their game results are unknown."""
+    sched = _schedules().iloc[[0]].copy()
+    sched["game_id"] = "2026_01_KC_BUF"
+    sched["season"] = 2026
+    sched["week"] = 1
+    sched[["home_score", "away_score", "result", "total"]] = None
+
+    ratings = _ratings().copy()
+    ratings["season"] = 2026
+    ratings["week"] = 1
+    ngs = _ngs().copy()
+    ngs["season"] = 2026
+    ngs["week"] = ngs["week"].replace({1: 0, 2: 1})
+
+    out = build_game_features(sched, ratings, ngs).set_index("game_id")
+
+    assert pd.isna(out.loc["2026_01_KC_BUF", "margin"])
+    assert pd.isna(out.loc["2026_01_KC_BUF", "total_points"])
+    assert np.isfinite(out.loc["2026_01_KC_BUF", FEATURE_COLS]).all()

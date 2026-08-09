@@ -1,7 +1,12 @@
 import pandas as pd
 import pytest
 
-from nfl_game.ratings.build import build_ratings, decay_weights, ratings_by_week
+from nfl_game.ratings.build import (
+    build_ratings,
+    decay_weights,
+    ratings_by_week,
+    ratings_for_targets,
+)
 
 
 def _games():
@@ -122,3 +127,43 @@ def test_ratings_by_week_covers_every_week():
     assert sorted(out["week"].unique()) == [1, 2, 3, 4]
     assert (out["season"] == 2024).all()
     assert len(out) == 4 * 4  # 4 weeks x 4 teams
+
+
+def test_ratings_for_targets_builds_future_week_without_same_season_pbp():
+    """Explicit future targets use completed history, even when no 2024 games are present."""
+    history = _games().query("season < 2024").copy()
+
+    out = ratings_for_targets(history, [(2024, 1), (2024, 2)])
+
+    assert sorted(out[["season", "week"]].drop_duplicates().itertuples(index=False, name=None)) == [
+        (2024, 1),
+        (2024, 2),
+    ]
+    assert out.groupby(["season", "week"])["team"].nunique().eq(4).all()
+
+
+def test_ratings_for_targets_excludes_every_game_in_the_target_week(monkeypatch):
+    """A target week is a pre-week cutoff, so Thursday cannot leak into Sunday."""
+    seen = []
+
+    def fake_build(team_games, asof_season, asof_week, **kwargs):
+        cutoff = team_games.loc[
+            (team_games["season"] < asof_season)
+            | ((team_games["season"] == asof_season) & (team_games["week"] < asof_week))
+        ]
+        seen.append(set(zip(cutoff["season"], cutoff["week"], strict=True)))
+        return pd.DataFrame({"team": ["AAA"], "off_rating": [0.0], "def_rating": [0.0]})
+
+    monkeypatch.setattr("nfl_game.ratings.build.build_ratings", fake_build)
+
+    ratings_for_targets(_games(), [(2024, 3)])
+
+    assert all(week < 3 for season, week in seen[0] if season == 2024)
+
+
+def test_ratings_for_targets_returns_documented_empty_schema():
+    """No scheduled targets returns a predictable empty ratings boundary."""
+    out = ratings_for_targets(_games(), [])
+
+    assert out.empty
+    assert list(out.columns) == ["season", "week", "team"]
