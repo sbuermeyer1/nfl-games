@@ -7,6 +7,7 @@ import pandas as pd
 
 HISTORICAL_MODEL_VERSION = "ridge-v1"
 OFFICIAL_ESTIMATOR = "ridge"
+PUBLICATION_STATUSES = frozenset({"pending", "published", "excluded"})
 RECORD_TYPES = frozenset({"backtest", "live"})
 GRADE_VALUES = frozenset({"win", "loss", "push", "pending", "no_pick"})
 PICK_VALUES = {
@@ -35,6 +36,16 @@ LEDGER_COLUMNS = [
     "kickoff_at",
     "actual_margin",
     "actual_total",
+    "spread_publication_status",
+    "total_publication_status",
+    "spread_exclusion_reason",
+    "total_exclusion_reason",
+    "published_spread_observed_at",
+    "published_total_observed_at",
+    "closing_spread_observed_at",
+    "closing_total_observed_at",
+    "current_kickoff_at",
+    "void_reason",
     "spread_pick",
     "total_pick",
     "spread_edge",
@@ -71,6 +82,28 @@ _NUMERIC_COLUMNS = [
 ]
 _IDENTITY_COLUMNS = ["model_version", "estimator", "game_id", "away_team", "home_team"]
 
+_LIVE_ONLY_COLUMNS = [
+    "spread_publication_status",
+    "total_publication_status",
+    "spread_exclusion_reason",
+    "total_exclusion_reason",
+    "published_spread_observed_at",
+    "published_total_observed_at",
+    "closing_spread_observed_at",
+    "closing_total_observed_at",
+    "current_kickoff_at",
+    "void_reason",
+]
+_TIMESTAMP_COLUMNS = [
+    "published_at",
+    "kickoff_at",
+    "published_spread_observed_at",
+    "published_total_observed_at",
+    "closing_spread_observed_at",
+    "closing_total_observed_at",
+    "current_kickoff_at",
+]
+
 
 def _pick(model, line, high_label, low_label):
     if pd.isna(model) or pd.isna(line) or model == line:
@@ -78,7 +111,9 @@ def _pick(model, line, high_label, low_label):
     return high_label if model > line else low_label
 
 
-def _grade(pick, actual, line, high_label):
+def _grade(pick, actual, line, high_label, force_no_pick=False):
+    if force_no_pick:
+        return "no_pick"
     if pd.isna(line) or pd.isna(actual):
         return "pending"
     if pd.isna(pick):
@@ -89,7 +124,9 @@ def _grade(pick, actual, line, high_label):
     return "win" if high_won == (pick == high_label) else "loss"
 
 
-def _clv(record_type, pick, published, closing, high_label):
+def _clv(record_type, pick, published, closing, high_label, force_no_pick=False):
+    if force_no_pick:
+        return np.nan
     if record_type != "live" or pd.isna(pick) or pd.isna(published) or pd.isna(closing):
         return np.nan
     movement = closing - published
@@ -98,6 +135,10 @@ def _clv(record_type, pick, published, closing, high_label):
 
 def _column(frame, name):
     return frame[name] if name in frame else pd.Series(np.nan, index=frame.index)
+
+
+def _force_no_pick(status, void_reason):
+    return (not pd.isna(status) and status == "excluded") or not pd.isna(void_reason)
 
 
 def grade_ledger(facts):
@@ -119,13 +160,26 @@ def grade_ledger(facts):
 
     actual_margin = _column(ledger, "actual_margin")
     actual_total = _column(ledger, "actual_total")
+    void_reason = _column(ledger, "void_reason")
+    spread_status = _column(ledger, "spread_publication_status")
+    total_status = _column(ledger, "total_publication_status")
+    spread_no_pick = [
+        _force_no_pick(status, reason) for status, reason in zip(spread_status, void_reason)
+    ]
+    total_no_pick = [
+        _force_no_pick(status, reason) for status, reason in zip(total_status, void_reason)
+    ]
     ledger["spread_grade"] = [
-        _grade(pick, actual, line, "home")
-        for pick, actual, line in zip(ledger["spread_pick"], actual_margin, spread_line)
+        _grade(pick, actual, line, "home", force)
+        for pick, actual, line, force in zip(
+            ledger["spread_pick"], actual_margin, spread_line, spread_no_pick
+        )
     ]
     ledger["total_grade"] = [
-        _grade(pick, actual, line, "over")
-        for pick, actual, line in zip(ledger["total_pick"], actual_total, total_line)
+        _grade(pick, actual, line, "over", force)
+        for pick, actual, line, force in zip(
+            ledger["total_pick"], actual_total, total_line, total_no_pick
+        )
     ]
 
     record_type = _column(ledger, "record_type")
@@ -134,28 +188,28 @@ def grade_ledger(facts):
     closing_spread = _column(ledger, "closing_spread_line")
     closing_total = _column(ledger, "closing_total_line")
     ledger["spread_clv"] = [
-        _clv(kind, pick, published, closing, "home")
-        for kind, pick, published, closing in zip(
-            record_type, ledger["spread_pick"], published_spread, closing_spread
+        _clv(kind, pick, published, closing, "home", force)
+        for kind, pick, published, closing, force in zip(
+            record_type, ledger["spread_pick"], published_spread, closing_spread, spread_no_pick
         )
     ]
     ledger["total_clv"] = [
-        _clv(kind, pick, published, closing, "over")
-        for kind, pick, published, closing in zip(
-            record_type, ledger["total_pick"], published_total, closing_total
+        _clv(kind, pick, published, closing, "over", force)
+        for kind, pick, published, closing, force in zip(
+            record_type, ledger["total_pick"], published_total, closing_total, total_no_pick
         )
     ]
 
     ledger["spread_close_grade"] = [
-        _grade(pick, actual, line, "home") if kind == "live" else pd.NA
-        for kind, pick, actual, line in zip(
-            record_type, ledger["spread_pick"], actual_margin, closing_spread
+        _grade(pick, actual, line, "home", force) if kind == "live" else pd.NA
+        for kind, pick, actual, line, force in zip(
+            record_type, ledger["spread_pick"], actual_margin, closing_spread, spread_no_pick
         )
     ]
     ledger["total_close_grade"] = [
-        _grade(pick, actual, line, "over") if kind == "live" else pd.NA
-        for kind, pick, actual, line in zip(
-            record_type, ledger["total_pick"], actual_total, closing_total
+        _grade(pick, actual, line, "over", force) if kind == "live" else pd.NA
+        for kind, pick, actual, line, force in zip(
+            record_type, ledger["total_pick"], actual_total, closing_total, total_no_pick
         )
     ]
     return ledger.reindex(columns=LEDGER_COLUMNS)
@@ -176,6 +230,8 @@ def build_backtest_ledger(predictions, model_version=HISTORICAL_MODEL_VERSION):
     facts["closing_spread_line"] = _column(facts, "spread_line")
     facts["closing_total_line"] = _column(facts, "total_line")
     facts["published_at"] = pd.NaT
+    for column in _LIVE_ONLY_COLUMNS:
+        facts[column] = pd.NA
 
     ledger = grade_ledger(facts)
     validate_ledger(ledger)
@@ -211,6 +267,55 @@ def _validate_derived(ledger):
             )
         except AssertionError as error:
             raise ValueError(f"derived {column} does not match facts") from error
+
+
+def _validate_utc_timestamps(ledger):
+    for column in _TIMESTAMP_COLUMNS:
+        for value in ledger.loc[ledger[column].notna(), column]:
+            try:
+                timestamp = pd.Timestamp(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"invalid UTC timestamp in {column}") from error
+            if timestamp.tzinfo is None or timestamp.utcoffset() != pd.Timedelta(0):
+                raise ValueError(f"invalid UTC timestamp in {column}")
+
+
+def _is_nonblank_string(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_market_publication(ledger, live, kind):
+    status_column = f"{kind}_publication_status"
+    reason_column = f"{kind}_exclusion_reason"
+    official_column = f"official_{kind}_line"
+    published_column = f"published_{kind}_line"
+    observed_column = f"published_{kind}_observed_at"
+
+    status = ledger.loc[live, status_column]
+    if status.isna().any() or not status.isin(PUBLICATION_STATUSES).all():
+        raise ValueError(f"invalid {kind} publication status")
+
+    official = ledger.loc[live, official_column]
+    published_line = ledger.loc[live, published_column]
+    reason = ledger.loc[live, reason_column]
+    observed_at = ledger.loc[live, observed_column]
+
+    published = status.eq("published")
+    valid_published = (
+        official.notna() & published_line.notna() & reason.isna() & observed_at.notna()
+    )
+    if not valid_published.loc[published].all():
+        raise ValueError(f"invalid published {kind} market")
+
+    pending = status.eq("pending")
+    valid_pending = official.isna() & published_line.isna() & reason.isna()
+    if not valid_pending.loc[pending].all():
+        raise ValueError(f"invalid pending {kind} market")
+
+    excluded = status.eq("excluded")
+    valid_excluded = official.isna() & published_line.isna() & reason.map(_is_nonblank_string)
+    if not valid_excluded.loc[excluded].all():
+        raise ValueError(f"invalid excluded {kind} market")
 
 
 def validate_ledger(ledger):
@@ -265,6 +370,18 @@ def validate_ledger(ledger):
     published_fields = ["published_spread_line", "published_total_line", "published_at"]
     if ledger.loc[backtest, published_fields].notna().any().any():
         raise ValueError("backtest rows cannot have published snapshot fields")
+    if ledger.loc[backtest, _LIVE_ONLY_COLUMNS].notna().any().any():
+        raise ValueError("backtest rows cannot have live-only fields")
+
+    _validate_utc_timestamps(ledger)
+    if ledger.loc[live, "current_kickoff_at"].isna().any():
+        raise ValueError("live rows require a current kickoff")
+    if ledger["void_reason"].dropna().map(lambda value: not _is_nonblank_string(value)).any():
+        raise ValueError("void reason must be null or a nonblank string")
+
+    for kind in ("spread", "total"):
+        _validate_market_publication(ledger, live, kind)
+
     for official, published in (
         ("official_spread_line", "published_spread_line"),
         ("official_total_line", "published_total_line"),

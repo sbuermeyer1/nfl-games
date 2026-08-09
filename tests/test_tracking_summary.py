@@ -42,6 +42,26 @@ def tracker_ledger():
                     pd.Timestamp("2026-09-01T12:00:00Z") if record_type == "live" else None
                 ),
                 "kickoff_at": None,
+                "spread_publication_status": ("published" if record_type == "live" else None),
+                "total_publication_status": ("published" if record_type == "live" else None),
+                "spread_exclusion_reason": None,
+                "total_exclusion_reason": None,
+                "published_spread_observed_at": (
+                    pd.Timestamp("2026-09-01T12:00:00Z") if record_type == "live" else None
+                ),
+                "published_total_observed_at": (
+                    pd.Timestamp("2026-09-01T12:00:00Z") if record_type == "live" else None
+                ),
+                "closing_spread_observed_at": (
+                    pd.Timestamp("2026-09-06T17:01:00Z") if record_type == "live" else None
+                ),
+                "closing_total_observed_at": (
+                    pd.Timestamp("2026-09-06T17:01:00Z") if record_type == "live" else None
+                ),
+                "current_kickoff_at": (
+                    pd.Timestamp("2026-09-06T17:00:00Z") if record_type == "live" else None
+                ),
+                "void_reason": None,
                 "actual_margin": actual_margin,
                 "actual_total": actual_total,
             }
@@ -74,6 +94,27 @@ def test_live_clv_uses_the_frozen_qualified_cohort():
         "n_clv": 1,
         "record": {"wins": 1, "losses": 0, "pushes": 0, "n_graded": 1, "win_rate": 1.0},
     }
+
+
+def test_excluded_markets_do_not_change_summary_denominators():
+    baseline = tracker_ledger()
+    excluded = baseline.loc[baseline["record_type"] == "live"].copy()
+    excluded.loc[:, "game_id"] = "excluded-game"
+    for kind in ("spread", "total"):
+        excluded.loc[:, f"{kind}_publication_status"] = "excluded"
+        excluded.loc[:, f"{kind}_exclusion_reason"] = "missing_line_at_deadline"
+        excluded.loc[:, f"official_{kind}_line"] = float("nan")
+        excluded.loc[:, f"published_{kind}_line"] = float("nan")
+        excluded.loc[:, f"closing_{kind}_line"] = float("nan")
+        excluded.loc[:, f"published_{kind}_observed_at"] = None
+        excluded.loc[:, f"closing_{kind}_observed_at"] = None
+    with_excluded = grade_ledger(pd.concat([baseline, excluded], ignore_index=True))
+
+    before = summarize_selection(baseline, "live", "all")
+    after = summarize_selection(with_excluded, "live", "all")
+
+    for key in ("all_predictions", "qualified", "spread_edges", "closing_line"):
+        assert after[key] == before[key]
 
 
 def test_empty_live_selection_is_unavailable_and_audit_requires_one_season():

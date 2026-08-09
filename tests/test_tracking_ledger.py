@@ -25,6 +25,16 @@ def facts(*overrides):
         "closing_total_line": 46.0,
         "published_at": pd.Timestamp("2026-09-01T12:00:00Z"),
         "kickoff_at": pd.Timestamp("2026-09-06T17:00:00Z"),
+        "spread_publication_status": "published",
+        "total_publication_status": "published",
+        "spread_exclusion_reason": pd.NA,
+        "total_exclusion_reason": pd.NA,
+        "published_spread_observed_at": pd.Timestamp("2026-09-01T12:00:00Z"),
+        "published_total_observed_at": pd.Timestamp("2026-09-01T12:00:00Z"),
+        "closing_spread_observed_at": pd.Timestamp("2026-09-06T17:01:00Z"),
+        "closing_total_observed_at": pd.Timestamp("2026-09-06T17:01:00Z"),
+        "current_kickoff_at": pd.Timestamp("2026-09-06T17:00:00Z"),
+        "void_reason": pd.NA,
         "actual_margin": 6.0,
         "actual_total": 47.0,
     }
@@ -152,6 +162,88 @@ def test_push_no_pick_and_pending_are_distinct():
     ]
 
 
+def test_excluded_market_is_no_pick_and_has_no_edge_clv_or_denominator():
+    ledger = grade_ledger(
+        facts(
+            {
+                "official_spread_line": np.nan,
+                "published_spread_line": np.nan,
+                "closing_spread_line": np.nan,
+                "spread_publication_status": "excluded",
+                "spread_exclusion_reason": "missing_line_at_deadline",
+            }
+        )
+    )
+    row = ledger.iloc[0]
+    assert pd.isna(row["spread_pick"])
+    assert pd.isna(row["spread_edge"])
+    assert row["spread_grade"] == "no_pick"
+    assert pd.isna(row["spread_clv"])
+    validate_ledger(ledger)
+
+
+def test_live_published_line_is_immutable_fact_and_clv_direction_stays_positive():
+    out = grade_ledger(facts({})).iloc[0]
+    assert out["official_spread_line"] == out["published_spread_line"] == 3.0
+    assert out["spread_clv"] == 2.0
+
+
+def test_void_game_is_no_pick_for_both_markets():
+    out = grade_ledger(facts({"void_reason": "cancelled"})).iloc[0]
+    assert out["spread_grade"] == "no_pick"
+    assert out["total_grade"] == "no_pick"
+    assert out["spread_close_grade"] == "no_pick"
+    assert out["total_close_grade"] == "no_pick"
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"spread_publication_status": "unknown"}, "publication status"),
+        (
+            {"spread_publication_status": "published", "published_spread_line": np.nan},
+            "published spread",
+        ),
+        (
+            {"spread_publication_status": "published", "spread_exclusion_reason": "why"},
+            "published spread",
+        ),
+        (
+            {"spread_publication_status": "published", "published_spread_observed_at": pd.NaT},
+            "published spread",
+        ),
+        (
+            {
+                "spread_publication_status": "pending",
+                "official_spread_line": 3.0,
+                "published_spread_line": 3.0,
+            },
+            "pending spread",
+        ),
+        (
+            {"spread_publication_status": "pending", "spread_exclusion_reason": "why"},
+            "pending spread",
+        ),
+        (
+            {"spread_publication_status": "excluded", "spread_exclusion_reason": "  "},
+            "excluded spread",
+        ),
+        ({"current_kickoff_at": pd.NaT}, "current kickoff"),
+        ({"void_reason": "  "}, "void reason"),
+        ({"published_at": pd.Timestamp("2026-09-01T12:00:00")}, "UTC timestamp"),
+        (
+            {"closing_total_observed_at": pd.Timestamp("2026-09-06T18:01:00+01:00")},
+            "UTC timestamp",
+        ),
+    ],
+)
+def test_validate_live_publication_state_rejects_invalid_facts(change, message):
+    ledger = grade_ledger(facts(change))
+
+    with pytest.raises(ValueError, match=message):
+        validate_ledger(ledger)
+
+
 def test_validate_ledger_rejects_duplicates_non_ridge_and_stale_grades():
     valid = grade_ledger(facts({}))
     validate_ledger(valid)
@@ -213,6 +305,44 @@ def test_build_backtest_ledger_validates_paired_missing_close_grades():
     assert pd.isna(ledger.loc[0, "spread_close_grade"])
     assert pd.isna(ledger.loc[0, "total_close_grade"])
     validate_ledger(ledger)
+
+
+def test_backtest_conversion_keeps_live_lifecycle_fields_null():
+    predictions = pd.DataFrame(
+        {
+            "game_id": ["2025_01_AAA_BBB"],
+            "season": [2025],
+            "week": [1],
+            "away_team": ["AAA"],
+            "home_team": ["BBB"],
+            "model_margin": [4.0],
+            "model_total": [46.0],
+            "spread_line": [3.0],
+            "total_line": [44.0],
+            "margin": [7.0],
+            "total_points": [48.0],
+        }
+    )
+    live_only = [
+        "spread_publication_status",
+        "total_publication_status",
+        "spread_exclusion_reason",
+        "total_exclusion_reason",
+        "published_spread_observed_at",
+        "published_total_observed_at",
+        "closing_spread_observed_at",
+        "closing_total_observed_at",
+        "current_kickoff_at",
+        "void_reason",
+    ]
+
+    ledger = build_backtest_ledger(predictions)
+
+    assert ledger[live_only].isna().all().all()
+    invalid = ledger.copy()
+    invalid.loc[0, "current_kickoff_at"] = pd.Timestamp("2025-09-01T12:00:00Z")
+    with pytest.raises(ValueError, match="live-only"):
+        validate_ledger(invalid)
 
 
 @pytest.mark.parametrize(
