@@ -67,6 +67,7 @@ class NflverseMarketProvider:
         self._timeout_seconds = timeout_seconds
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self._latest_futures = {}
         self._snapshots = {}
         self._futures = {}
 
@@ -80,6 +81,7 @@ class NflverseMarketProvider:
             if future is None:
                 future = self._executor.submit(self._load_snapshot, season)
                 self._futures[season] = future
+                self._latest_futures[season] = future
 
         try:
             refreshed = future.result(timeout=self._timeout_seconds)
@@ -101,6 +103,8 @@ class NflverseMarketProvider:
 
     def _store_refresh(self, season, future, refreshed):
         with self._lock:
+            if self._latest_futures.get(season) is not future:
+                return refreshed
             if self._futures.get(season) is future:
                 self._futures.pop(season)
             self._snapshots[season] = refreshed

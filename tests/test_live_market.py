@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from threading import Event
+from threading import Event, current_thread
 
 import numpy as np
 import pandas as pd
@@ -98,6 +98,41 @@ def test_concurrent_cold_requests_share_one_loader_call(schedule_fixture):
 
     assert calls == [[2026]]
     assert all(snapshot.observed_at == snapshots[0].observed_at for snapshot in snapshots)
+
+
+def test_delayed_old_waiter_cannot_overwrite_a_newer_refresh(schedule_fixture):
+    clock = FakeClock(datetime(2026, 9, 1, tzinfo=UTC))
+    old_store_ready = Event()
+    release_old_store = Event()
+    calls = []
+
+    def loader(seasons, save=False):
+        calls.append(seasons)
+        return schedule_fixture.assign(spread_line=float(len(calls)))
+
+    class InterleavingProvider(NflverseMarketProvider):
+        def _store_refresh(self, season, future, refreshed):
+            if current_thread().name.startswith("delayed-old"):
+                old_store_ready.set()
+                release_old_store.wait(timeout=1)
+            return super()._store_refresh(season, future, refreshed)
+
+    provider = InterleavingProvider(loader=loader, clock=clock, timeout_seconds=1)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="delayed-old") as pool:
+        delayed_old = pool.submit(provider.snapshot, 2026)
+        assert old_store_ready.wait(timeout=1)
+
+        same_old = provider.snapshot(2026)
+        clock.advance(minutes=6)
+        new_result = provider.snapshot(2026)
+        release_old_store.set()
+        assert delayed_old.result().rows.loc[0, "spread_line"] == 1.0
+
+    final_cache = provider.snapshot(2026)
+    assert same_old.rows.loc[0, "spread_line"] == 1.0
+    assert new_result.rows.loc[0, "spread_line"] == 2.0
+    assert final_cache.rows.loc[0, "spread_line"] == 2.0
+    assert calls == [[2026], [2026]]
 
 
 def test_cold_timeout_keeps_future_registered_for_later_consumption(schedule_fixture):
