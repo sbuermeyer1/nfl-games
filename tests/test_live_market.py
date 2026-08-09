@@ -191,6 +191,8 @@ def test_future_completing_at_timeout_boundary_is_consumed(schedule_fixture):
 
 def test_timeout_returns_stale_cache_without_overwriting_it(schedule_fixture):
     clock = FakeClock(datetime(2026, 9, 1, tzinfo=UTC))
+    refresh_started = Event()
+    refresh_completed = Event()
     release = Event()
     calls = []
 
@@ -198,19 +200,24 @@ def test_timeout_returns_stale_cache_without_overwriting_it(schedule_fixture):
         calls.append(seasons)
         if len(calls) == 1:
             return schedule_fixture
+        refresh_started.set()
         release.wait(timeout=1)
         return schedule_fixture.assign(spread_line=7.5)
 
     provider = NflverseMarketProvider(
         loader=loader,
         clock=clock,
-        timeout_seconds=0.01,
+        timeout_seconds=1,
     )
     first = provider.snapshot(2026)
     clock.advance(minutes=6)
+    provider._timeout_seconds = 0.01
 
     stale = provider.snapshot(2026)
+    assert refresh_started.is_set()
+    provider._futures[2026].add_done_callback(lambda _future: refresh_completed.set())
     release.set()
+    assert refresh_completed.wait(timeout=1)
     refreshed = provider.snapshot(2026)
 
     assert stale.stale is True
