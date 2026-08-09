@@ -65,12 +65,28 @@ def test_load_schedules_normalizes_team_codes(monkeypatch, tmp_path):
             )
 
     monkeypatch.setattr(nfl, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(nfl.nflreadpy, "load_schedules", lambda: FakePolars())
+    monkeypatch.setattr(nfl.nflreadpy, "load_schedules", lambda seasons: FakePolars())
 
     out = nfl.load_schedules(save=False)
 
     assert list(out["home_team"]) == ["LV", "LAR"]
     assert list(out["away_team"]) == ["LAC", "LAR"]
+
+
+def test_load_schedules_forwards_requested_seasons(monkeypatch):
+    calls = []
+
+    class FakePolars:
+        def to_pandas(self):
+            return pd.DataFrame({"season": [2026], "home_team": ["KC"], "away_team": ["BUF"]})
+
+    monkeypatch.setattr(
+        nfl.nflreadpy,
+        "load_schedules",
+        lambda seasons: calls.append(seasons) or FakePolars(),
+    )
+    nfl.load_schedules([2026], save=False)
+    assert calls == [[2026]]
 
 
 def test_load_pbp_normalizes_team_codes(monkeypatch, tmp_path):

@@ -31,7 +31,8 @@ def load_schedules(seasons: list[int] | None = None, save: bool = True) -> pd.Da
     Passing seasons=None loads every season (1999+), including future games whose
     result/total are null but whose spread_line/total_line may already be posted.
     """
-    df = nflreadpy.load_schedules().to_pandas()
+    requested = True if seasons is None else seasons
+    df = nflreadpy.load_schedules(requested).to_pandas()
     df = normalize_team_codes(df, SCHEDULE_TEAM_COLS)
     if seasons is not None:
         df = df[df["season"].isin(seasons)].reset_index(drop=True)
