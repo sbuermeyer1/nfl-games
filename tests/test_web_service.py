@@ -551,6 +551,17 @@ def test_market_snapshot_team_identity_must_match_features(monkeypatch):
         service.payload(2026, 1, "ridge", 2.0)
 
 
+@pytest.mark.parametrize("column", ["away_team", "home_team"])
+def test_market_snapshot_team_identity_must_not_be_missing(monkeypatch, column):
+    snapshot = market_snapshot()
+    snapshot.rows[column] = snapshot.rows[column].astype("string")
+    snapshot.rows.loc[0, column] = pd.NA
+    service, _ = fake_fitted_2026_service(monkeypatch, FakeProvider(snapshot))
+
+    with pytest.raises(SlateUnavailableError, match="identity"):
+        service.payload(2026, 1, "ridge", 2.0)
+
+
 def test_schedule_records_uses_one_snapshot_and_json_safe_lines(monkeypatch):
     provider = FakeProvider(market_snapshot(spread_line=None))
     service, _ = fake_fitted_2026_service(monkeypatch, provider)

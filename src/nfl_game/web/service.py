@@ -313,6 +313,8 @@ class SlateService:
             raise SlateUnavailableError("market snapshot identity does not match slate games")
 
         market = market.set_index("game_id").loc[target["game_id"]]
+        if market[["away_team", "home_team"]].isna().any(axis=None):
+            raise SlateUnavailableError("market snapshot identity contains missing teams")
         if (
             market["away_team"].to_numpy() != target["away_team"].to_numpy()
         ).any() or (
