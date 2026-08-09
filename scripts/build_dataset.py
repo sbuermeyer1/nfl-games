@@ -11,7 +11,10 @@ from nfl_game.ratings.ngs import team_week_ngs
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Rebuild the frozen historical game-feature corpus through 2025.",
+        epilog="For production 2026 schedule/features, run scripts/refresh_2026.py instead.",
+    )
     ap.add_argument("--start-season", type=int, default=2016)
     ap.add_argument("--end-season", type=int, default=2025)
     args = ap.parse_args()
