@@ -163,6 +163,31 @@ def test_missing_market_at_exactly_one_hour_is_excluded_forever():
     assert pd.isna(later.iloc[0]["official_spread_line"])
 
 
+def test_schedule_missing_at_deadline_still_excludes_pending_market():
+    kickoff = NOW + pd.Timedelta(hours=2)
+    pending = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, spread=None),
+        predictions_fixture(),
+        NOW,
+    )
+    missing_schedule = schedule_fixture(kickoff).iloc[0:0]
+
+    out = advance_live_ledger(
+        pending,
+        missing_schedule,
+        pd.DataFrame(),
+        NOW + pd.Timedelta(hours=1),
+    )
+
+    row = out.iloc[0]
+    assert row["spread_publication_status"] == "excluded"
+    assert row["spread_exclusion_reason"] == "missing_line_at_deadline"
+    assert pd.isna(row["published_spread_line"])
+    assert row["total_publication_status"] == "published"
+    assert row["published_total_line"] == 44.0
+
+
 def test_first_run_at_deadline_excludes_both_markets_even_when_lines_exist():
     kickoff = NOW + pd.Timedelta(hours=1)
 
@@ -337,6 +362,45 @@ def test_incomplete_final_record_raises_at_exactly_seven_days():
             pd.DataFrame(),
             NOW + pd.Timedelta(days=7),
         )
+
+
+def test_schedule_missing_at_seven_days_still_raises_for_incomplete_record():
+    published = published_fixture()
+    missing_schedule = schedule_fixture(NOW).iloc[0:0]
+
+    with pytest.raises(LiveTrackerLifecycleError, match=GAME_ID):
+        advance_live_ledger(
+            published,
+            missing_schedule,
+            pd.DataFrame(),
+            NOW + pd.Timedelta(days=7),
+        )
+
+
+def test_schedule_missing_retains_completed_record_unchanged_after_seven_days():
+    published = published_fixture()
+    complete = advance_live_ledger(
+        published,
+        schedule_fixture(
+            NOW,
+            spread=5.0,
+            total=46.0,
+            result=6.0,
+            actual_total=47.0,
+        ),
+        pd.DataFrame(),
+        NOW + pd.Timedelta(hours=6),
+    )
+    missing_schedule = schedule_fixture(NOW).iloc[0:0]
+
+    retained = advance_live_ledger(
+        complete,
+        missing_schedule,
+        pd.DataFrame(),
+        NOW + pd.Timedelta(days=8),
+    )
+
+    pd.testing.assert_frame_equal(retained, complete)
 
 
 def test_manually_voided_game_bypasses_retry_error_and_grades_both_markets_no_pick():

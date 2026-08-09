@@ -244,7 +244,19 @@ def advance_live_ledger(
         record = _capture_final(record, game, now)
         advanced.append(record)
 
-    advanced.extend(records[game_id] for game_id in sorted(records))
+    for game_id in sorted(records):
+        record = records[game_id]
+        persisted_game = {
+            "kickoff_at": record["current_kickoff_at"],
+            "spread_line": np.nan,
+            "total_line": np.nan,
+            "result": np.nan,
+            "total": np.nan,
+        }
+        record = _advance_market(record, persisted_game, "spread", now)
+        record = _advance_market(record, persisted_game, "total", now)
+        record = _capture_final(record, persisted_game, now)
+        advanced.append(record)
     result = pd.DataFrame.from_records(advanced, columns=LIVE_LEDGER_COLUMNS)
     result = grade_ledger(result)
     result = result.sort_values("game_id", kind="stable").reset_index(drop=True)
