@@ -409,15 +409,26 @@ def test_cli_requests_2026_pbp_and_ngs_only_after_a_regular_season_game_is_final
     historical_feature_fixture().to_parquet(feature_path, index=False)
     schedule = normalized_2026_schedule_fixture(weeks=(1, 2), completed=(1,))
     loaders, calls = _cli_loaders(schedule)
+    captured = {}
+
+    def load_empty_ngs(seasons, stat_type, save=False):
+        calls["ngs"].append((list(seasons), stat_type))
+        return pd.DataFrame(
+            {
+                "season_type": pd.Series(dtype="string"),
+                "week": pd.Series(dtype="int64"),
+            }
+        )
+
+    def capture_artifacts(**kwargs):
+        captured.update(kwargs)
+        return RefreshArtifacts(historical_feature_fixture(), schedule)
+
+    loaders["load_ngs"] = load_empty_ngs
 
     monkeypatch.setattr(refresh_cli, "normalize_schedule", lambda rows, season: rows.copy())
     monkeypatch.setattr(refresh_cli, "team_game_epa", lambda pbp: pd.DataFrame())
-    monkeypatch.setattr(refresh_cli, "team_week_ngs", lambda *frames: refresh_cli.empty_ngs_frame())
-    monkeypatch.setattr(
-        refresh_cli,
-        "build_refresh_artifacts",
-        lambda **kwargs: RefreshArtifacts(historical_feature_fixture(), schedule),
-    )
+    monkeypatch.setattr(refresh_cli, "build_refresh_artifacts", capture_artifacts)
     monkeypatch.setattr(refresh_cli, "build_historical_ledger", lambda features: pd.DataFrame())
     monkeypatch.setattr(refresh_cli, "assert_acceptance_baseline", lambda ledger, expected: None)
 
@@ -433,5 +444,6 @@ def test_cli_requests_2026_pbp_and_ngs_only_after_a_regular_season_game_is_final
         ([2026], "rushing"),
         ([2026], "receiving"),
     ]
+    pd.testing.assert_frame_equal(captured["ngs"], refresh_cli.empty_ngs_frame())
     assert "spread_line" not in FEATURE_COLS
     assert "total_line" not in FEATURE_COLS

@@ -117,6 +117,8 @@ def main(argv=None, loaders=None, now=None) -> None:
             ngs_loader([2026], "rushing", save=False),
             ngs_loader([2026], "receiving", save=False),
         )
+        if ngs.empty:
+            ngs = empty_ngs_frame()
     else:
         ngs = empty_ngs_frame()
 
