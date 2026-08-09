@@ -251,7 +251,9 @@ class SlateService:
         self, season: int, week: int, estimator: str = "ridge"
     ) -> pd.DataFrame:
         self._validate(season, week, estimator, DEFAULT_EDGE_THRESHOLD)
-        return self._bundle(season, estimator).model.predict(self._target(season, week))
+        predictions = self._bundle(season, estimator).model.predict(self._target(season, week))
+        columns = ["game_id", "model_margin", "model_total"]
+        return predictions.loc[:, columns].copy()
 
     def _market_snapshot(self, season: int) -> MarketSnapshot:
         if self._market_provider is not None:

@@ -507,6 +507,29 @@ def test_payload_overlays_live_markets_without_changing_model_predictions(monkey
     }
 
 
+def test_model_predictions_exposes_only_raw_model_columns(monkeypatch):
+    """Catch market or pick fields leaking into the lifecycle prediction boundary."""
+    service, _ = fake_fitted_2026_service(monkeypatch)
+
+    class ExtraColumnModel:
+        def predict(self, target):
+            return pd.DataFrame(
+                {
+                    "game_id": target["game_id"].to_numpy(),
+                    "model_margin": [4.0] * len(target),
+                    "model_total": [46.0] * len(target),
+                    "market_spread": [99.0] * len(target),
+                    "spread_pick": ["home"] * len(target),
+                }
+            )
+
+    bundle = service._bundle(2026, "ridge")
+    monkeypatch.setattr(bundle.model, "predict", ExtraColumnModel().predict)
+    predictions = service.model_predictions(2026, 1)
+
+    assert predictions.columns.tolist() == ["game_id", "model_margin", "model_total"]
+
+
 def test_successful_feed_missing_one_market_does_not_use_packaged_value(monkeypatch):
     provider = FakeProvider(market_snapshot(spread_line=None, total_line=47.0))
     service, _ = fake_fitted_2026_service(monkeypatch, provider)

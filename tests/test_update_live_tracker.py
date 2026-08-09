@@ -1,0 +1,244 @@
+import hashlib
+import json
+import shutil
+from pathlib import Path
+
+import pandas as pd
+import pytest
+from scripts import build_tracker, update_live_tracker
+
+from nfl_game.tracking.live import LiveTrackerLifecycleError
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+NOW = pd.Timestamp("2026-09-05T17:00:00Z")
+GAME_ID = "2026_01_NE_SEA"
+
+
+def sha256_file(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def schedule_inside_publish_window():
+    schedule = pd.read_parquet(PROJECT_ROOT / "data/processed/schedule_2026.parquet")
+    row = schedule.loc[schedule["game_id"].eq(GAME_ID)].iloc[[0]].copy()
+    row["gameday"] = "2026-09-06"
+    row["gametime"] = "13:00"
+    row["result"] = pd.NA
+    row["total"] = pd.NA
+    row["spread_line"] = 2.5
+    row["total_line"] = 45.5
+    return row
+
+
+def write_artifacts(tmp_path):
+    feature_path = tmp_path / "game_features.parquet"
+    ledger_path = tmp_path / "tracker_ledger.parquet"
+    shutil.copyfile(PROJECT_ROOT / "data/processed/game_features.parquet", feature_path)
+    shutil.copyfile(PROJECT_ROOT / "data/processed/tracker_ledger.parquet", ledger_path)
+    return feature_path, ledger_path
+
+
+def run_cli(tmp_path, *mode, monkeypatch, schedule=None, now=NOW, voids=()):
+    feature_path = tmp_path / "game_features.parquet"
+    ledger_path = tmp_path / "tracker_ledger.parquet"
+    prediction_calls = []
+
+    def predictions(self, season, week, estimator="ridge"):
+        prediction_calls.append((season, week, estimator))
+        return pd.DataFrame(
+            {"game_id": [GAME_ID], "model_margin": [4.0], "model_total": [47.0]}
+        )
+
+    monkeypatch.setattr(update_live_tracker.SlateService, "model_predictions", predictions)
+    argv = [
+        "--features",
+        str(feature_path),
+        "--ledger",
+        str(ledger_path),
+        "--season",
+        "2026",
+        *mode,
+    ]
+    for value in voids:
+        argv.extend(["--void-game", value])
+    result = update_live_tracker.main(
+        argv,
+        loader=lambda seasons, save=False: (
+            schedule_inside_publish_window() if schedule is None else schedule.copy()
+        ),
+        now=now,
+    )
+    return result, prediction_calls
+
+
+def test_default_dry_run_reports_change_without_writing(tmp_path, monkeypatch, capsys):
+    _, ledger_path = write_artifacts(tmp_path)
+    original = ledger_path.read_bytes()
+    before = sorted(path.name for path in tmp_path.iterdir())
+
+    result, calls = run_cli(tmp_path, monkeypatch=monkeypatch)
+
+    assert result == 0
+    assert ledger_path.read_bytes() == original
+    assert sorted(path.name for path in tmp_path.iterdir()) == before
+    assert calls == [(2026, 1, "ridge")]
+    summary = json.loads(capsys.readouterr().out)
+    assert summary == {
+        "changed": True,
+        "historical_records": 1359,
+        "live_records": 1,
+        "mode": "dry-run",
+        "new_live_records": 1,
+        "voided_records": 0,
+    }
+
+
+def test_write_combines_unchanged_history_with_valid_live_rows(tmp_path, monkeypatch):
+    _, ledger_path = write_artifacts(tmp_path)
+
+    result, _ = run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+
+    ledger = pd.read_parquet(ledger_path)
+    historical = ledger.query("record_type == 'backtest'")
+    assert result == 0
+    assert len(historical) == 1359
+    assert len(ledger.query("record_type == 'live'")) == 1
+    build_tracker.assert_acceptance_baseline(historical, build_tracker.EXPECTED_BASELINE)
+
+
+def test_identical_write_is_digest_no_op_and_does_not_repredict(
+    tmp_path, monkeypatch, capsys
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    first, first_calls = run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+    digest = sha256_file(ledger_path)
+    capsys.readouterr()
+
+    second, second_calls = run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+    summary = json.loads(capsys.readouterr().out)
+
+    assert first == second == 0
+    assert first_calls == [(2026, 1, "ridge")]
+    assert second_calls == []
+    assert sha256_file(ledger_path) == digest
+    assert summary["changed"] is False
+    assert summary["new_live_records"] == 0
+
+
+@pytest.mark.parametrize("artifact", ["ledger", "features"])
+def test_corrupt_input_fails_before_writing(tmp_path, monkeypatch, artifact):
+    feature_path, ledger_path = write_artifacts(tmp_path)
+    if artifact == "ledger":
+        corrupt = pd.read_parquet(ledger_path)
+        corrupt.loc[0, "estimator"] = "gbm"
+        corrupt.to_parquet(ledger_path, index=False)
+    else:
+        corrupt = pd.read_parquet(feature_path).drop(columns="game_id")
+        corrupt.to_parquet(feature_path, index=False)
+    original = ledger_path.read_bytes()
+
+    with pytest.raises(ValueError):
+        run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+
+    assert ledger_path.read_bytes() == original
+
+
+def test_lifecycle_failure_does_not_replace_ledger(tmp_path, monkeypatch):
+    _, ledger_path = write_artifacts(tmp_path)
+    run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+    original = ledger_path.read_bytes()
+    overdue = schedule_inside_publish_window()
+    overdue["gameday"] = "2026-08-25"
+
+    with pytest.raises(LiveTrackerLifecycleError, match="incomplete after seven days"):
+        run_cli(tmp_path, "--write", monkeypatch=monkeypatch, schedule=overdue)
+
+    assert ledger_path.read_bytes() == original
+
+
+def test_repeatable_manual_void_is_applied_before_overdue_validation(
+    tmp_path, monkeypatch, capsys
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+    overdue = schedule_inside_publish_window()
+    overdue["gameday"] = "2026-08-25"
+    capsys.readouterr()
+
+    first, _ = run_cli(
+        tmp_path,
+        "--write",
+        monkeypatch=monkeypatch,
+        schedule=overdue,
+        voids=(f"{GAME_ID}=cancelled",),
+    )
+    digest = sha256_file(ledger_path)
+    second, _ = run_cli(
+        tmp_path,
+        "--write",
+        monkeypatch=monkeypatch,
+        schedule=overdue,
+        voids=(f"{GAME_ID}=cancelled",),
+    )
+
+    ledger = pd.read_parquet(ledger_path)
+    assert first == second == 0
+    assert ledger.query("record_type == 'live'").iloc[0]["void_reason"] == "cancelled"
+    assert sha256_file(ledger_path) == digest
+
+
+def test_atomic_replace_failure_preserves_ledger_and_cleans_temporary_file(
+    tmp_path, monkeypatch
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    original = ledger_path.read_bytes()
+
+    def fail_replace(source, destination):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(update_live_tracker.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+
+    assert ledger_path.read_bytes() == original
+    assert list(tmp_path.glob(f".{ledger_path.name}.update-*.tmp")) == []
+
+
+def test_atomic_staging_failure_preserves_ledger_and_cleans_temporary_file(
+    tmp_path, monkeypatch
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    original = ledger_path.read_bytes()
+
+    def fail_fsync(file_descriptor):
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(update_live_tracker.os, "fsync", fail_fsync)
+
+    with pytest.raises(OSError, match="fsync failed"):
+        run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
+
+    assert ledger_path.read_bytes() == original
+    assert list(tmp_path.glob(f".{ledger_path.name}.update-*.tmp")) == []
+
+
+def test_dry_run_before_publication_window_handles_no_live_rows(
+    tmp_path, monkeypatch, capsys
+):
+    _, ledger_path = write_artifacts(tmp_path)
+    original = ledger_path.read_bytes()
+
+    result, calls = run_cli(
+        tmp_path,
+        "--dry-run",
+        monkeypatch=monkeypatch,
+        now=pd.Timestamp("2026-08-01T17:00:00Z"),
+    )
+
+    assert result == 0
+    assert calls == []
+    assert ledger_path.read_bytes() == original
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["live_records"] == 0
+    assert summary["new_live_records"] == 0
