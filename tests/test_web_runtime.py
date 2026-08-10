@@ -237,6 +237,19 @@ def test_load_app_wraps_invalid_schedule_schema(tmp_path):
         load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
 
 
+def test_load_app_rejects_schedule_without_2026_regular_season_games(tmp_path):
+    """Catch a valid-shaped artifact that provides no required 2026 fallback."""
+    dataset = write_feature_artifact(tmp_path)
+    tracker = write_tracker_artifact(tmp_path)
+    schedule = tmp_path / "schedule.parquet"
+    rows = pd.read_parquet(PROCESSED_DIR / "schedule_2026.parquet")
+    rows["season"] = 2025
+    rows.to_parquet(schedule, index=False)
+
+    with pytest.raises(RuntimeConfigError, match="cannot load packaged 2026 schedule"):
+        load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
+
+
 def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):
     """Catch the command-line entry point bypassing the fail-closed runtime guard."""
     monkeypatch.delenv("ACCESS_CODE", raising=False)

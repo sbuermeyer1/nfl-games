@@ -75,6 +75,8 @@ def load_app(
         raise RuntimeConfigError(f"packaged 2026 schedule not found: {schedule}")
     try:
         packaged_schedule = normalize_schedule(pd.read_parquet(schedule), 2026)
+        if packaged_schedule.empty:
+            raise ValueError("schedule contains no 2026 regular-season games")
         market_provider = NflverseMarketProvider()
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged 2026 schedule {schedule}: {exc}") from exc
