@@ -728,7 +728,10 @@ def test_slate_defaults_and_csv_forward_matching_arguments_and_content():
     }
     assert csv_game["market_total"] == ""
     assert csv_response.headers["content-type"].startswith("text/csv")
-    assert csv_response.headers["content-disposition"] == 'attachment; filename="slate_2025_wk01_ridge.csv"'
+    assert (
+        csv_response.headers["content-disposition"]
+        == 'attachment; filename="slate_2025_wk01_ridge.csv"'
+    )
 
 
 @pytest.mark.parametrize("path", ["/api/slate", "/api/slate.csv"])

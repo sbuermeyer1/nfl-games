@@ -45,9 +45,7 @@ def empty_ngs_frame() -> pd.DataFrame:
         "team": pd.Series(dtype="string"),
     }
     columns.update({metric: pd.Series(dtype="float64") for metric in NGS_METRICS})
-    columns.update(
-        {f"{metric}_imputed": pd.Series(dtype="int64") for metric in NGS_METRICS}
-    )
+    columns.update({f"{metric}_imputed": pd.Series(dtype="int64") for metric in NGS_METRICS})
     return pd.DataFrame(columns)
 
 
@@ -80,12 +78,8 @@ def _parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="validate and report without writing")
     mode.add_argument("--write", action="store_true", help="atomically replace changed artifacts")
-    parser.add_argument(
-        "--features", type=Path, default=PROCESSED_DIR / "game_features.parquet"
-    )
-    parser.add_argument(
-        "--schedule", type=Path, default=PROCESSED_DIR / "schedule_2026.parquet"
-    )
+    parser.add_argument("--features", type=Path, default=PROCESSED_DIR / "game_features.parquet")
+    parser.add_argument("--schedule", type=Path, default=PROCESSED_DIR / "schedule_2026.parquet")
     return parser
 
 

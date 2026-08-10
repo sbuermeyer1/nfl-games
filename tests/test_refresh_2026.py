@@ -159,7 +159,9 @@ def test_no_active_weeks_returns_only_the_frozen_history_without_building_live_r
 
     result = build_refresh_artifacts(historical, schedule, pd.DataFrame(), pd.DataFrame(), NOW)
 
-    pd.testing.assert_frame_equal(result.features, historical.reset_index(drop=True), check_exact=True)
+    pd.testing.assert_frame_equal(
+        result.features, historical.reset_index(drop=True), check_exact=True
+    )
     pd.testing.assert_frame_equal(result.schedule, schedule, check_exact=True)
 
 
@@ -237,11 +239,7 @@ def test_failed_second_replacement_rolls_back_the_first_replacement(tmp_path, mo
     def fail_feature_publication(source, destination):
         nonlocal failed
         source = Path(source)
-        if (
-            not failed
-            and Path(destination) == feature_path
-            and ".publish-" in source.name
-        ):
+        if not failed and Path(destination) == feature_path and ".publish-" in source.name:
             failed = True
             raise OSError("simulated feature replacement failure")
         return real_replace(source, destination)

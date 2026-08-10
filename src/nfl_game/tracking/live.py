@@ -167,7 +167,12 @@ def _capture_final(record, game, now):
     existing_total = _finite_number(advanced.get("actual_total"))
     result = _finite_number(game.get("result"))
     actual_total = _finite_number(game.get("total"))
-    if existing_margin is None and existing_total is None and result is not None and actual_total is not None:
+    if (
+        existing_margin is None
+        and existing_total is None
+        and result is not None
+        and actual_total is not None
+    ):
         advanced["actual_margin"] = result
         advanced["actual_total"] = actual_total
 
@@ -210,8 +215,7 @@ def advance_live_ledger(
     """Advance live facts without mutating any caller-owned frame."""
     now = _utc_timestamp(now, "now")
     schedule_rows = {
-        str(row.game_id): row._asdict()
-        for row in schedule.copy(deep=True).itertuples(index=False)
+        str(row.game_id): row._asdict() for row in schedule.copy(deep=True).itertuples(index=False)
     }
     prediction_rows = {
         str(row.game_id): row._asdict()
@@ -232,9 +236,7 @@ def advance_live_ledger(
                 continue
             prediction = prediction_rows.get(game_id)
             if prediction is None:
-                raise LiveTrackerLifecycleError(
-                    f"eligible game {game_id} has no Ridge prediction"
-                )
+                raise LiveTrackerLifecycleError(f"eligible game {game_id} has no Ridge prediction")
             record = _new_record(game, prediction, now, model_version)
         else:
             record = _apply_schedule_change(record, game)

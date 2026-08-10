@@ -500,13 +500,9 @@ def test_live_tab_offers_overall_and_2026_then_fetches_concrete_live_audit():
     live_2026_summary["season"] = 2026
     responses = {
         "/api/tracker/options": response(body=live_options),
-        "/api/tracker/summary?record_type=backtest&season=all": response(
-            body=overall_summary()
-        ),
+        "/api/tracker/summary?record_type=backtest&season=all": response(body=overall_summary()),
         "/api/tracker/summary?record_type=live&season=all": response(body=live_summary()),
-        "/api/tracker/summary?record_type=live&season=2026": response(
-            body=live_2026_summary
-        ),
+        "/api/tracker/summary?record_type=live&season=2026": response(body=live_2026_summary),
         "/api/tracker/games?record_type=live&season=2026": response(
             body={"games": [excluded_game, pending_game]}
         ),
@@ -540,9 +536,7 @@ def test_live_click_before_options_resolve_is_queued_and_preserved():
     live_options["live_available"] = True
     responses = {
         "/api/tracker/options": {"deferred": True},
-        "/api/tracker/summary?record_type=live&season=all": response(
-            body=live_summary()
-        ),
+        "/api/tracker/summary?record_type=live&season=all": response(body=live_summary()),
     }
     actions = [
         {

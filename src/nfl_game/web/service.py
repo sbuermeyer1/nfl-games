@@ -172,9 +172,7 @@ class SlateService:
         latest_season = seasons[-1]
         weeks = self.weeks(latest_season)
         latest_week = weeks[-1]
-        schedule = self._packaged_schedule.loc[
-            self._packaged_schedule["season"].eq(latest_season)
-        ]
+        schedule = self._packaged_schedule.loc[self._packaged_schedule["season"].eq(latest_season)]
         if SCHEDULE_STATE_COLUMNS.issubset(schedule.columns):
             unplayed_weeks = sorted(
                 {
@@ -247,9 +245,7 @@ class SlateService:
             raise SlateInputError(f"week {week} is not available for season {season}")
         return target
 
-    def model_predictions(
-        self, season: int, week: int, estimator: str = "ridge"
-    ) -> pd.DataFrame:
+    def model_predictions(self, season: int, week: int, estimator: str = "ridge") -> pd.DataFrame:
         self._validate(season, week, estimator, DEFAULT_EDGE_THRESHOLD)
         predictions = self._bundle(season, estimator).model.predict(self._target(season, week))
         columns = ["game_id", "model_margin", "model_total"]
@@ -261,9 +257,7 @@ class SlateService:
                 return self._market_provider.snapshot(season)
             except MarketUnavailableError:
                 pass
-        rows = self._packaged_schedule.loc[
-            self._packaged_schedule["season"].eq(season)
-        ].copy()
+        rows = self._packaged_schedule.loc[self._packaged_schedule["season"].eq(season)].copy()
         return MarketSnapshot(
             rows=rows,
             observed_at=self._packaged_observed_at,
@@ -297,9 +291,7 @@ class SlateService:
                     record[key] = timestamp.isoformat()
         return records
 
-    def _overlay_market(
-        self, target: pd.DataFrame, snapshot: MarketSnapshot
-    ) -> pd.DataFrame:
+    def _overlay_market(self, target: pd.DataFrame, snapshot: MarketSnapshot) -> pd.DataFrame:
         missing = sorted(MARKET_COLUMNS - set(snapshot.rows.columns))
         if missing:
             raise SlateUnavailableError(f"market snapshot missing required columns: {missing}")
@@ -317,9 +309,7 @@ class SlateService:
         market = market.set_index("game_id").loc[target["game_id"]]
         if market[["away_team", "home_team"]].isna().any(axis=None):
             raise SlateUnavailableError("market snapshot identity contains missing teams")
-        if (
-            market["away_team"].to_numpy() != target["away_team"].to_numpy()
-        ).any() or (
+        if (market["away_team"].to_numpy() != target["away_team"].to_numpy()).any() or (
             market["home_team"].to_numpy() != target["home_team"].to_numpy()
         ).any():
             raise SlateUnavailableError("market snapshot identity does not match slate teams")
@@ -329,9 +319,7 @@ class SlateService:
             overlaid["spread_line"] = pd.to_numeric(
                 market["spread_line"], errors="raise"
             ).to_numpy()
-            overlaid["total_line"] = pd.to_numeric(
-                market["total_line"], errors="raise"
-            ).to_numpy()
+            overlaid["total_line"] = pd.to_numeric(market["total_line"], errors="raise").to_numpy()
         except (TypeError, ValueError) as exc:
             raise SlateUnavailableError("market snapshot contains invalid lines") from exc
         return overlaid

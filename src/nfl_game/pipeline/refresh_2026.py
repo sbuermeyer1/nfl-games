@@ -52,9 +52,7 @@ def build_refresh_artifacts(
         return RefreshArtifacts(historical, schedules.copy())
 
     ratings = ratings_for_targets(team_games, targets)
-    target_schedule = schedules.loc[
-        schedules["season"].eq(2026) & schedules["week"].isin(weeks)
-    ]
+    target_schedule = schedules.loc[schedules["season"].eq(2026) & schedules["week"].isin(weeks)]
     live = build_game_features(target_schedule, ratings, ngs)
     live = live.loc[live["season"].eq(2026)]
     live = _cast_live_like_history(live, historical)

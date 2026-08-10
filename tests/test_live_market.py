@@ -282,9 +282,7 @@ def test_successful_snapshot_normalizes_teams_and_kickoffs(schedule_fixture):
             "duplicate game_id",
         ),
         (
-            lambda rows: rows.assign(
-                home_team=rows["home_team"].where(rows.index != 0, "DAL")
-            ),
+            lambda rows: rows.assign(home_team=rows["home_team"].where(rows.index != 0, "DAL")),
             "team mismatch",
         ),
         (

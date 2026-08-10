@@ -45,9 +45,7 @@ def run_cli(tmp_path, *mode, monkeypatch, schedule=None, now=NOW, voids=()):
 
     def predictions(self, season, week, estimator="ridge"):
         prediction_calls.append((season, week, estimator))
-        return pd.DataFrame(
-            {"game_id": [GAME_ID], "model_margin": [4.0], "model_total": [47.0]}
-        )
+        return pd.DataFrame({"game_id": [GAME_ID], "model_margin": [4.0], "model_total": [47.0]})
 
     monkeypatch.setattr(update_live_tracker.SlateService, "model_predictions", predictions)
     argv = [
@@ -106,9 +104,7 @@ def test_write_combines_unchanged_history_with_valid_live_rows(tmp_path, monkeyp
     build_tracker.assert_acceptance_baseline(historical, build_tracker.EXPECTED_BASELINE)
 
 
-def test_identical_write_is_digest_no_op_and_does_not_repredict(
-    tmp_path, monkeypatch, capsys
-):
+def test_identical_write_is_digest_no_op_and_does_not_repredict(tmp_path, monkeypatch, capsys):
     _, ledger_path = write_artifacts(tmp_path)
     first, first_calls = run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
     digest = sha256_file(ledger_path)
@@ -156,9 +152,7 @@ def test_lifecycle_failure_does_not_replace_ledger(tmp_path, monkeypatch):
     assert ledger_path.read_bytes() == original
 
 
-def test_repeatable_manual_void_is_applied_before_overdue_validation(
-    tmp_path, monkeypatch, capsys
-):
+def test_repeatable_manual_void_is_applied_before_overdue_validation(tmp_path, monkeypatch, capsys):
     _, ledger_path = write_artifacts(tmp_path)
     run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
     overdue = schedule_inside_publish_window()
@@ -187,9 +181,7 @@ def test_repeatable_manual_void_is_applied_before_overdue_validation(
     assert sha256_file(ledger_path) == digest
 
 
-def test_atomic_replace_failure_preserves_ledger_and_cleans_temporary_file(
-    tmp_path, monkeypatch
-):
+def test_atomic_replace_failure_preserves_ledger_and_cleans_temporary_file(tmp_path, monkeypatch):
     _, ledger_path = write_artifacts(tmp_path)
     original = ledger_path.read_bytes()
 
@@ -205,9 +197,7 @@ def test_atomic_replace_failure_preserves_ledger_and_cleans_temporary_file(
     assert list(tmp_path.glob(f".{ledger_path.name}.update-*.tmp")) == []
 
 
-def test_atomic_staging_failure_preserves_ledger_and_cleans_temporary_file(
-    tmp_path, monkeypatch
-):
+def test_atomic_staging_failure_preserves_ledger_and_cleans_temporary_file(tmp_path, monkeypatch):
     _, ledger_path = write_artifacts(tmp_path)
     original = ledger_path.read_bytes()
 
@@ -223,9 +213,7 @@ def test_atomic_staging_failure_preserves_ledger_and_cleans_temporary_file(
     assert list(tmp_path.glob(f".{ledger_path.name}.update-*.tmp")) == []
 
 
-def test_dry_run_before_publication_window_handles_no_live_rows(
-    tmp_path, monkeypatch, capsys
-):
+def test_dry_run_before_publication_window_handles_no_live_rows(tmp_path, monkeypatch, capsys):
     _, ledger_path = write_artifacts(tmp_path)
     original = ledger_path.read_bytes()
 
@@ -270,9 +258,7 @@ def invalid_schedule(case):
         ("duplicate_team", "team mismatch within a week"),
     ],
 )
-def test_invalid_current_schedule_is_rejected_without_writing(
-    tmp_path, monkeypatch, case, message
-):
+def test_invalid_current_schedule_is_rejected_without_writing(tmp_path, monkeypatch, case, message):
     _, ledger_path = write_artifacts(tmp_path)
     original = ledger_path.read_bytes()
 
@@ -302,9 +288,7 @@ def test_swapped_feature_game_ids_are_rejected_without_writing(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("mutation", ["extra", "reordered"])
-def test_nonexact_ledger_schema_is_rejected_without_writing(
-    tmp_path, monkeypatch, mutation
-):
+def test_nonexact_ledger_schema_is_rejected_without_writing(tmp_path, monkeypatch, mutation):
     _, ledger_path = write_artifacts(tmp_path)
     ledger = pd.read_parquet(ledger_path)
     if mutation == "extra":

@@ -1,6 +1,5 @@
 """Embedded full-season schedule page."""
 
-
 SCHEDULE_PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2026 NFL Schedule</title>

@@ -80,9 +80,7 @@ def packaged_schedule(weeks=(1, 2)) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def market_snapshot(
-    *, spread_line=4.5, total_line=47.0, observed_at="2026-09-01T12:00:00Z"
-):
+def market_snapshot(*, spread_line=4.5, total_line=47.0, observed_at="2026-09-01T12:00:00Z"):
     rows = packaged_schedule((1,))
     rows.loc[0, "spread_line"] = spread_line
     rows.loc[0, "total_line"] = total_line

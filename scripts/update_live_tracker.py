@@ -77,12 +77,8 @@ def _parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="validate and report without writing")
     mode.add_argument("--write", action="store_true", help="atomically replace a changed ledger")
-    parser.add_argument(
-        "--features", type=Path, default=PROCESSED_DIR / "game_features.parquet"
-    )
-    parser.add_argument(
-        "--ledger", type=Path, default=PROCESSED_DIR / "tracker_ledger.parquet"
-    )
+    parser.add_argument("--features", type=Path, default=PROCESSED_DIR / "game_features.parquet")
+    parser.add_argument("--ledger", type=Path, default=PROCESSED_DIR / "tracker_ledger.parquet")
     parser.add_argument("--season", type=int, default=2026)
     parser.add_argument("--now", help="UTC lifecycle timestamp (defaults to the current time)")
     parser.add_argument(
@@ -139,8 +135,7 @@ def _load_ledger(path: Path) -> pd.DataFrame:
     ledger = pd.read_parquet(path)
     schema = tuple(ledger.columns)
     legacy_backtest = (
-        schema == LEGACY_BACKTEST_SCHEMA
-        and ledger["record_type"].eq("backtest").all()
+        schema == LEGACY_BACKTEST_SCHEMA and ledger["record_type"].eq("backtest").all()
     )
     if legacy_backtest:
         ledger = ledger.reindex(columns=LEDGER_COLUMNS)
@@ -154,8 +149,12 @@ def _validate_current_schedule(schedule: pd.DataFrame) -> None:
     if schedule.empty:
         raise ScheduleSchemaError("schedule contains no regular-season games for season")
 
-    identity = schedule["game_id"].astype("string").str.extract(
-        r"^(?P<season>\d{4})_(?P<week>\d{2})_(?P<away_team>[A-Z]+)_(?P<home_team>[A-Z]+)$"
+    identity = (
+        schedule["game_id"]
+        .astype("string")
+        .str.extract(
+            r"^(?P<season>\d{4})_(?P<week>\d{2})_(?P<away_team>[A-Z]+)_(?P<home_team>[A-Z]+)$"
+        )
     )
     if identity.isna().any(axis=None):
         raise ScheduleSchemaError("schedule contains a team mismatch with game_id")
@@ -180,9 +179,7 @@ def _validate_current_schedule(schedule: pd.DataFrame) -> None:
         raise ScheduleSchemaError("schedule contains a team mismatch within a week")
 
 
-def _validate_feature_schedule_identity(
-    features: pd.DataFrame, schedule: pd.DataFrame
-) -> None:
+def _validate_feature_schedule_identity(features: pd.DataFrame, schedule: pd.DataFrame) -> None:
     if schedule.empty:
         return
     game_ids = schedule["game_id"].astype(str).tolist()
@@ -195,18 +192,14 @@ def _validate_feature_schedule_identity(
         .loc[game_ids, ["season", "week", "away_team", "home_team"]]
         .reset_index(drop=True)
     )
-    schedule_identity = schedule[
-        ["season", "week", "away_team", "home_team"]
-    ].reset_index(drop=True)
+    schedule_identity = schedule[["season", "week", "away_team", "home_team"]].reset_index(
+        drop=True
+    )
     mismatched = (
         feature_identity["season"].astype(int).ne(schedule_identity["season"].astype(int))
         | feature_identity["week"].astype(int).ne(schedule_identity["week"].astype(int))
-        | feature_identity["away_team"].astype(str).ne(
-            schedule_identity["away_team"].astype(str)
-        )
-        | feature_identity["home_team"].astype(str).ne(
-            schedule_identity["home_team"].astype(str)
-        )
+        | feature_identity["away_team"].astype(str).ne(schedule_identity["away_team"].astype(str))
+        | feature_identity["home_team"].astype(str).ne(schedule_identity["home_team"].astype(str))
     )
     if mismatched.any():
         raise ValueError("feature identity does not match schedule")
@@ -255,9 +248,7 @@ def _canonicalize_ledger(ledger: pd.DataFrame) -> pd.DataFrame:
         if column in {"season", "week"}:
             canonical[column] = canonical[column].astype("int64")
         elif column in CANONICAL_NUMERIC_COLUMNS:
-            canonical[column] = pd.to_numeric(
-                canonical[column], errors="raise"
-            ).astype("float64")
+            canonical[column] = pd.to_numeric(canonical[column], errors="raise").astype("float64")
         elif column in CANONICAL_TIMESTAMP_COLUMNS:
             canonical[column] = pd.to_datetime(canonical[column], utc=True).astype(
                 "datetime64[ns, UTC]"
@@ -324,9 +315,7 @@ def main(argv=None, loader=None, now=None) -> int:
     schedule = normalize_schedule(raw_schedule, args.season)
     _validate_current_schedule(schedule)
     selected_schedule = _select_schedule(schedule, existing_live, current)
-    predictions = _new_predictions(
-        service, features, selected_schedule, existing_live, args.season
-    )
+    predictions = _new_predictions(service, features, selected_schedule, existing_live, args.season)
     advanced_live = advance_live_ledger(
         existing_live,
         selected_schedule,

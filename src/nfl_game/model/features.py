@@ -55,9 +55,7 @@ def _trailing_ngs(ngs: pd.DataFrame, halflife: float) -> pd.DataFrame:
             "week": pd.Series(dtype=ngs["week"].dtype),
             "team": pd.Series(dtype=ngs["team"].dtype),
         }
-        columns.update(
-            {f"trail_{metric}": pd.Series(dtype="float64") for metric in NGS_METRICS}
-        )
+        columns.update({f"trail_{metric}": pd.Series(dtype="float64") for metric in NGS_METRICS})
         columns["trail_imputed_any"] = pd.Series(dtype="int64")
         return pd.DataFrame(columns)
 

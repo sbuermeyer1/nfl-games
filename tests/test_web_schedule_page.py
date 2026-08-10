@@ -52,9 +52,7 @@ def schedule_state(responses, actions):
     page = client().get("/schedule")
     script = SCRIPT.search(page.text)
     assert script, "schedule page must contain an executable script"
-    payload = json.dumps(
-        {"script": script.group(1), "responses": responses, "actions": actions}
-    )
+    payload = json.dumps({"script": script.group(1), "responses": responses, "actions": actions})
     context = quickjs.Context()
     context.eval(f"const input = JSON.parse({json.dumps(payload)});")
     context.eval(SCHEDULE_HARNESS)
@@ -206,11 +204,7 @@ def test_schedule_renders_all_regular_season_games_current_freshness_and_safe_nu
 def test_schedule_marks_packaged_market_data_stale():
     """Catch fallback lines being presented with the same confidence as current lines."""
     state = schedule_state(
-        {
-            "/api/schedule?season=2026": response(
-                body=schedule_body(stale=True, source="packaged")
-            )
-        },
+        {"/api/schedule?season=2026": response(body=schedule_body(stale=True, source="packaged"))},
         initialize_actions(),
     )
 
@@ -257,11 +251,7 @@ def test_schedule_ignores_a_late_older_response():
 def test_schedule_redirects_to_login_when_the_session_expires():
     """Catch an expired session leaving the schedule page in a broken state."""
     state = schedule_state(
-        {
-            "/api/schedule?season=2026": response(
-                status=401, body={"error": "session expired"}
-            )
-        },
+        {"/api/schedule?season=2026": response(status=401, body={"error": "session expired"})},
         initialize_actions(),
     )
 

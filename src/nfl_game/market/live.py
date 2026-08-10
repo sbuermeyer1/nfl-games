@@ -27,8 +27,12 @@ def _validate_market_rows(rows: pd.DataFrame) -> None:
     if rows.empty:
         raise ScheduleSchemaError("schedule contains no regular-season games for season")
 
-    identity = rows["game_id"].astype("string").str.extract(
-        r"^(?P<season>\d{4})_(?P<week>\d{2})_(?P<away_team>[A-Z]+)_(?P<home_team>[A-Z]+)$"
+    identity = (
+        rows["game_id"]
+        .astype("string")
+        .str.extract(
+            r"^(?P<season>\d{4})_(?P<week>\d{2})_(?P<away_team>[A-Z]+)_(?P<home_team>[A-Z]+)$"
+        )
     )
     if identity.isna().any(axis=None):
         raise ScheduleSchemaError("schedule contains a team mismatch with game_id")
