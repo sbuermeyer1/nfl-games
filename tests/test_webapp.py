@@ -137,7 +137,7 @@ class FakeTrackerService:
             "model_version": "ridge-v1",
             "qualified_edge": 2.0,
             "spread_edge_thresholds": [5.0, 10.0, 15.0],
-            "live_available": False,
+            "live_available": True,
         }
 
     def summary(self, record_type, season):
@@ -148,7 +148,7 @@ class FakeTrackerService:
 
     def records(self, record_type, season):
         self.calls.append(("records", record_type, season))
-        return [{"game_id": "2025_01_AAA_BBB"}]
+        return [{"game_id": f"{season}_01_AAA_BBB"}]
 
 
 def client(service=None, tracker_service=None, access_code=None):
@@ -643,7 +643,7 @@ def test_tracker_routes_forward_exact_selections_and_link_from_slate():
         "season": "all",
     }
     assert games.json() == {"games": [{"game_id": "2025_01_AAA_BBB"}]}
-    assert live_games.json() == {"games": [{"game_id": "2025_01_AAA_BBB"}]}
+    assert live_games.json() == {"games": [{"game_id": "2026_01_AAA_BBB"}]}
     assert tracker.calls == [
         ("options",),
         ("summary", "backtest", "all"),

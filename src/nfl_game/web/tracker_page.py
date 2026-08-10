@@ -90,6 +90,7 @@ const closingLine = document.getElementById('closing-line');
 
 let activeRecordType = 'backtest';
 let trackerOptions = null;
+let queuedRecordType = null;
 let latestSummaryRequest = 0;
 let latestGamesRequest = 0;
 
@@ -309,6 +310,11 @@ function selectRecordType(recordType) {
   historicalTab.setAttribute('aria-selected', recordType === 'backtest' ? 'true' : 'false');
   liveTab.setAttribute('aria-selected', recordType === 'live' ? 'true' : 'false');
   invalidateTracker();
+  if (!trackerOptions) {
+    queuedRecordType = recordType;
+    return Promise.resolve();
+  }
+  queuedRecordType = null;
   replaceSeasonOptions(trackerOptions);
   return loadSelection();
 }
@@ -337,7 +343,8 @@ async function initialize() {
   try {
     const options = await jsonOrError('/api/tracker/options');
     trackerOptions = options;
-    activeRecordType = options.default_record_type;
+    activeRecordType = queuedRecordType || options.default_record_type;
+    queuedRecordType = null;
     replaceSeasonOptions(options);
     historicalTab.setAttribute('aria-selected', activeRecordType === 'backtest' ? 'true' : 'false');
     liveTab.setAttribute('aria-selected', activeRecordType === 'live' ? 'true' : 'false');

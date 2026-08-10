@@ -306,6 +306,10 @@ eval(input.script);
         selected: option.selected,
       })),
     },
+    tabs: {
+      historical: nodes['historical-tab']['aria-selected'],
+      live: nodes['live-tab']['aria-selected'],
+    },
   });
 })().catch(error => {
   globalThis.__state = JSON.stringify({ fatal: error.message, calls, unhandled });
@@ -443,19 +447,52 @@ def test_live_tab_offers_overall_and_2026_then_fetches_concrete_live_audit():
     live_options = options()
     live_options["seasons"]["live"] = [2026]
     live_options["live_available"] = True
-    live_game = audit_game(2026, "LIVE", "TEAM")
-    live_game.update(
+    excluded_game = audit_game(2026, "LIVE", "TEAM")
+    excluded_game.update(
         {
             "official_spread_line": None,
+            "official_total_line": None,
             "spread_pick": None,
+            "total_pick": None,
             "spread_edge": None,
+            "total_edge": None,
+            "actual_margin": None,
+            "actual_total": None,
             "spread_grade": "no_pick",
+            "total_grade": "no_pick",
             "spread_publication_status": "excluded",
+            "total_publication_status": "excluded",
             "spread_exclusion_reason": "missing_line_at_deadline",
+            "total_exclusion_reason": "missing_line_at_deadline",
             "closing_spread_line": None,
-            "total_publication_status": "pending",
+            "closing_total_line": None,
+            "spread_close_grade": "no_pick",
+            "total_close_grade": "no_pick",
             "published_at": "2026-09-05T17:00:00+00:00",
             "current_kickoff_at": "2026-09-06T17:00:00+00:00",
+        }
+    )
+    pending_game = audit_game(2026, "WAIT", "TEAM")
+    pending_game.update(
+        {
+            "official_spread_line": None,
+            "official_total_line": None,
+            "spread_pick": None,
+            "total_pick": None,
+            "spread_edge": None,
+            "total_edge": None,
+            "actual_margin": None,
+            "actual_total": None,
+            "spread_grade": "pending",
+            "total_grade": "pending",
+            "spread_publication_status": "pending",
+            "total_publication_status": "pending",
+            "closing_spread_line": None,
+            "closing_total_line": None,
+            "spread_close_grade": "pending",
+            "total_close_grade": "pending",
+            "published_at": "2026-09-05T17:00:00+00:00",
+            "current_kickoff_at": "2026-09-13T17:00:00+00:00",
         }
     )
     live_2026_summary = live_summary()
@@ -471,7 +508,7 @@ def test_live_tab_offers_overall_and_2026_then_fetches_concrete_live_audit():
             body=live_2026_summary
         ),
         "/api/tracker/games?record_type=live&season=2026": response(
-            body={"games": [live_game]}
+            body={"games": [excluded_game, pending_game]}
         ),
     }
     actions = initialize_actions() + [
@@ -494,6 +531,43 @@ def test_live_tab_offers_overall_and_2026_then_fetches_concrete_live_audit():
     assert "pending" in audit
     assert "n/a" in audit
     assert state["unhandled"] == []
+
+
+def test_live_click_before_options_resolve_is_queued_and_preserved():
+    """Catch an early Live click throwing or being reset to the historical default."""
+    live_options = options()
+    live_options["seasons"]["live"] = [2026]
+    live_options["live_available"] = True
+    responses = {
+        "/api/tracker/options": {"deferred": True},
+        "/api/tracker/summary?record_type=live&season=all": response(
+            body=live_summary()
+        ),
+    }
+    actions = [
+        {
+            "type": "fire",
+            "target": "document",
+            "event": "DOMContentLoaded",
+            "wait": False,
+        },
+        {"type": "settle"},
+        {"type": "fire", "target": "live-tab", "event": "click", "wait": True},
+        {
+            "type": "resolve",
+            "url": "/api/tracker/options",
+            "response": response(body=live_options),
+        },
+        {"type": "settle"},
+    ]
+
+    state = tracker_state(responses, actions)
+
+    assert state["unhandled"] == []
+    assert state["tabs"] == {"historical": "false", "live": "true"}
+    assert [option["value"] for option in state["season"]["options"]] == ["all", "2026"]
+    assert state["season"]["value"] == "all"
+    assert "/api/tracker/summary?record_type=live&season=all" in state["calls"]
 
 
 def test_out_of_order_season_responses_cannot_replace_current_selection():
