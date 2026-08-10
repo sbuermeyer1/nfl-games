@@ -236,7 +236,7 @@ architecture changes.
 create the Blueprint from the reviewed integrated `master` branch, confirm that service
 name, and set a non-empty private `ACCESS_CODE` secret. Do not put the secret in the
 repository, a command history, request logs, or a deployment note. The image packages
-both immutable Parquet artifacts and starts `scripts/game_app.py`; production therefore
+all three immutable Parquet artifacts and starts `scripts/game_app.py`; production therefore
 fails closed if `ACCESS_CODE` is missing.
 
 Login throttling reads the first `X-Forwarded-For` address when that header is present.
