@@ -28,7 +28,9 @@ dashboard's operational documentation lives in the "Web dashboard operations" se
     .\.venv\Scripts\python.exe scripts\build_dataset.py --start-season 2016 --end-season 2025
     .\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
     .\.venv\Scripts\python.exe scripts\build_tracker.py
-    .\.venv\Scripts\python.exe scripts\slate.py --season 2025 --week 1
+    .\.venv\Scripts\python.exe scripts\refresh_2026.py --dry-run
+    .\.venv\Scripts\python.exe scripts\update_live_tracker.py --dry-run
+    .\.venv\Scripts\python.exe scripts\slate.py --season 2026 --week 1
 
 - `build_dataset.py` loads pbp/schedules/NGS, builds as-of ratings and features, and
   writes `data/processed/game_features.parquet`. Run this first, and rerun it whenever
@@ -39,8 +41,17 @@ dashboard's operational documentation lives in the "Web dashboard operations" se
   `market_comparison_regression`. This is the acceptance test -- see "Reading the
   backtest" below.
 - `build_tracker.py` rebuilds the offline historical Ridge `ridge-v1` tracker ledger from
-  the cached feature artifact and accepts only the regression baseline below. Run it after
-  rebuilding features; review and commit both Parquet artifacts together.
+  the cached feature artifact and accepts only the regression baseline below. It is not a
+  routine live updater.
+- `refresh_2026.py` downloads the current schedule, preserves the frozen through-2025
+  feature corpus exactly, and atomically writes the complete 2026 schedule plus current/
+  next prediction-week features. It defaults to dry-run; `--dry-run` and `--write` are
+  mutually exclusive.
+- `update_live_tracker.py` advances immutable 2026 publication/finalization facts while
+  rechecking the exact 1,359-row historical baseline. It also defaults to dry-run and is
+  the only artifact writer that may add official live records. `--write` remains approval
+  gated through `ENABLE_OFFICIAL_TRACKER`; `--void-game GAME_ID=REASON` is the audited
+  manual exception path.
 - `slate.py --season Y --week W` fits `GameModel` on every season before `Y`, calibrates
   on `walk_forward` predictions from every season before `Y` (letting `walk_forward` skip
   whatever it must -- see the degenerate-feature note below), and writes/prints a
@@ -58,6 +69,21 @@ why defensive strength comes from EPA. NGS also applies qualifier thresholds: pa
 covers ~99% of team-games, rushing only ~86%. Missing values are imputed with the
 league-week mean and flagged via `<metric>_imputed`.
 
+## Packaged artifacts
+
+Exactly three reviewed Parquet files ship in the repository and Docker image:
+
+- `data/processed/game_features.parquet` -- frozen historical model rows through 2025 plus
+  only the currently active 2026 prediction weeks;
+- `data/processed/schedule_2026.parquet` -- all 272 normalized 2026 regular-season games,
+  with spread and total independently nullable, and the runtime's offline market fallback;
+- `data/processed/tracker_ledger.parquet` -- exactly 1,359 accepted historical rows plus
+  separately typed, immutable official live rows after Stage 2 begins.
+
+Runtime startup fails closed if any file is missing, malformed, or if the schedule has no
+2026 regular-season rows. Artifact builders and workflow jobs may replace files atomically;
+the web package is read-only and must never write them.
+
 ## Architecture
 
 Data flows one direction and must remain:
@@ -66,7 +92,18 @@ Data flows one direction and must remain:
 data -> ratings -> model -> market -> tracking -> web
 ```
 
-Do not introduce reverse dependencies.
+Do not introduce reverse dependencies. Package ownership is strict:
+
+- `data/` owns nflverse I/O, schemas, and team-code normalization;
+- `ratings/` owns strictly-prior as-of team strength and cannot consume market lines;
+- `model/` owns features, Ridge/GBM prediction, and calibration; `FEATURE_COLS` is the
+  complete model input boundary and contains no spread, total, or market-derived value;
+- `market/` overlays independently nullable lines after prediction and owns the bounded
+  five-minute live cache/stale-snapshot behavior;
+- `tracking/` owns historical summaries and immutable live publication/closing/grading
+  transitions, but no web route may invoke an artifact writer;
+- `web/` validates and reads packaged inputs, presents live/fallback metadata, and remains
+  read-only.
 
 - `ratings/epa.py` — the core. `fit_ratings` regresses play EPA on offense/defense team
   dummies, which is what separates team quality from schedule quality. **Both `off_rating`
@@ -99,6 +136,23 @@ Do not introduce reverse dependencies.
   `ridge-v1` is official. Historical and live records must never aggregate together;
   thresholds are fixed at 2 points for qualified picks and cumulative 5/10/15-point
   spread cohorts. A model-version change must not rewrite published live history.
+
+### Immutable and market-blind facts
+
+- A target game's ratings use strictly earlier games; same-week and future results are
+  forbidden inputs.
+- Model training and prediction consume only `FEATURE_COLS`. A live schedule/line refresh
+  may change presentation and edge calculations, never `model_margin` or `model_total`.
+- For an official live record, model version, estimator, predictions, `published_at`, the
+  original `kickoff_at`, every published/official line, and its observed time are frozen.
+  A postponement may update only `current_kickoff_at` before finalization.
+- Spread and total publication states progress independently. Missing, excluded, push,
+  closing-line, CLV, and void facts are explicit; none may be inferred by rewriting an
+  earlier field.
+- Historical and live rows are always selected and summarized separately. A routine live
+  update must preserve the 1,359 historical rows and the exact acceptance metrics below.
+- Default CLI invocations and all web requests are non-mutating. Only explicit atomic
+  builder/updater `--write` modes may replace packaged bytes.
 
 ## Reading the backtest
 

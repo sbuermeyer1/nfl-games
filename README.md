@@ -21,10 +21,12 @@ Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 
 ## Web dashboard operations
 
-The dashboard serves the checked-in, immutable `data/processed/game_features.parquet`
-and `data/processed/tracker_ledger.parquet` artifacts. It reads both artifacts at
-startup; there is no website refresh endpoint and the web service cannot mutate either
-artifact.
+The dashboard serves three checked-in artifacts:
+`data/processed/game_features.parquet`, `data/processed/schedule_2026.parquet`, and
+`data/processed/tracker_ledger.parquet`. It reads all three at startup; there is no
+website refresh endpoint, and the web service cannot mutate any artifact. The feature
+artifact contains the frozen historical corpus plus the current 2026 prediction weeks;
+the schedule artifact contains all 272 regular-season games.
 
 ### Run locally
 
@@ -55,11 +57,19 @@ coverage exercises the cookie behavior.
 
 ### Dashboard and API
 
-The page initializes to the latest available season and its latest week. The
-available seasons, weeks, and estimators come from the packaged artifact; changing a
-season reloads its valid weeks. The default estimator is `ridge` and the default edge
-threshold is `2.0`. The table compares model and market spread/total values, and an
-edge marker is informational rather than betting advice.
+The page initializes to the latest available season and the first unplayed prediction
+week in that season, advancing to the next week after the current week's games become
+final. If every available week is final it selects the latest one. Available seasons,
+prediction weeks, and estimators come from the feature artifact. The default estimator
+is `ridge` and the default edge threshold is `2.0`. The table compares model and market
+spread/total values, and an edge marker is informational rather than betting advice.
+
+For 2026, spread and total lines are refreshed from the nflverse schedule feed through
+`nflreadpy`. Each server process caches one validated season snapshot for five minutes
+and waits at most five seconds for an upstream refresh. A failed cold request falls back
+to the packaged schedule; after a successful request, an upstream error or timeout
+returns the last snapshot marked stale. Spread and total availability are independent:
+a missing value stays visibly missing and never changes a model prediction.
 
 The browser uses these read-only endpoints:
 
@@ -71,14 +81,19 @@ The browser uses these read-only endpoints:
 - `GET /api/slate.csv` accepts the same parameters and downloads CSV with the same
   rows and ordering as the displayed slate.
 
+- `GET /schedule` serves the full 2026 schedule page; `GET /api/schedule?season=2026`
+  returns all regular-season games plus the market source, observation time, and stale
+  indicator.
+
 ### Performance tracker
 
 `/tracker` separates historical walk-forward backtests from live published picks.
 Historical records cover Ridge `ridge-v1`, 2021–2025, against closing lines. Qualified
 picks use 2+ points, and spread groups are cumulative 5+/10+/15+; pushes do not enter
-win-rate denominators. The live section starts in 2026 and remains unavailable until the
-separate live workflow is built. Future official live grades use frozen published lines,
-while CLV and the close record are secondary.
+win-rate denominators. The live section starts in 2026. In Stage 1 it remains read-only
+and empty while official writes are disabled. Once separately approved for Stage 2,
+official live grades use frozen published lines; closing-line value (CLV) and the close
+record are secondary and cannot rewrite the official result.
 
 The four tracker routes are read-only:
 
@@ -93,26 +108,88 @@ In protected mode, unauthenticated browser routes redirect to `/login` and API r
 return `401`. Wrong login codes return `401`; repeated failed attempts from one client
 address are temporarily throttled with `429`.
 
-### Refresh the packaged artifact
+### 2026 artifact and tracker operations
 
-Refreshes are an offline, reviewed data change. After rebuilding features, rebuild the
-tracker with `.\.venv\Scripts\python.exe scripts\build_tracker.py`. Build, test,
-backtest, and commit both Parquet artifacts together:
+Both update commands default to preview mode. Running either command without
+`--dry-run` or `--write` validates and reports but does not change an artifact. The mode
+flags are mutually exclusive.
+
+Refresh the full 2026 regular-season schedule and the current/next prediction-week
+features from nflverse, review the reported row counts and digests, then write the two
+artifacts atomically:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\build_dataset.py --start-season 2016 --end-season 2026
-.\.venv\Scripts\python.exe scripts\build_tracker.py
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
-git add data/processed/game_features.parquet data/processed/tracker_ledger.parquet
-git commit -m "data: refresh packaged NFL artifacts"
+.\.venv\Scripts\python.exe scripts\refresh_2026.py --dry-run
+.\.venv\Scripts\python.exe scripts\refresh_2026.py --write
 ```
 
-When upstream results change, both Parquet artifacts must be reviewed, committed, and
-deployed together.
+Preview the official tracker lifecycle separately. `--write` is permitted only after
+Stage 2 approval; it atomically replaces the ledger only when deterministic bytes have
+changed. `--now` accepts a timezone-aware UTC lifecycle time for an audited manual run.
 
-The website has no refresh endpoint and cannot mutate the artifact. Do not use a web
-deployment as a substitute for this workflow.
+```powershell
+.\.venv\Scripts\python.exe scripts\update_live_tracker.py --dry-run
+# Stage 2 only:
+.\.venv\Scripts\python.exe scripts\update_live_tracker.py --write
+```
+
+Publication and grading rules are immutable once a game is recorded:
+
+- A Ridge `ridge-v1` prediction becomes eligible 24 hours before kickoff. Its model
+  margin, model total, model version, publication time, and original kickoff are frozen.
+- Spread and total publish independently. An available line is frozen with its observation
+  time. A missing line remains pending until one hour before kickoff, then becomes excluded
+  with `missing_line_at_deadline`; a record first seen after that deadline is excluded with
+  `publication_window_missed`. An excluded market never enters its win-rate denominator.
+- Six hours after the current kickoff, a completed score and the then-current closing lines
+  are captured. Official wins/losses/pushes are graded against the frozen published lines;
+  pushes return the stake and are excluded from win-rate denominators. CLV compares the
+  published and closing lines and is secondary to the official record.
+- A postponement updates only `current_kickoff_at`; it cannot rewrite the original kickoff,
+  prediction, publication facts, or already-frozen lines. A missing game remains under the
+  same lifecycle checks.
+- A manual void is explicit and repeatable only with the same nonblank reason:
+  `.\.venv\Scripts\python.exe scripts\update_live_tracker.py --write --void-game
+  "GAME_ID=reason"`. A voided record is retained for audit and is not graded.
+- If a record is still missing required final facts seven days after kickoff, the updater
+  fails loudly. Inspect the upstream game and recorded lines; correct the feed/input or
+  apply an audited void rather than deleting or silently rewriting the row.
+
+Every artifact change must retain exactly 1,359 historical tracker rows and the acceptance
+records below. Never rebuild historical facts as part of a routine live update.
+
+### Automated refresh and staged tracker enablement
+
+`.github/workflows/refresh-2026-model.yml` runs daily at 10:30 UTC and by manual dispatch.
+It tests, refreshes the feature and schedule artifacts, builds the container, and commits
+only when either artifact changed. `.github/workflows/update-2026-tracker.yml` runs every
+15 minutes during August-February and by manual dispatch. Both workflows use the shared
+`nfl-generated-data-writer` concurrency group, never cancel an in-progress writer, and
+skip empty commits. Before pushing to `master`, each fetches the remote and rejects the
+push unless the checked-out commit still contains the current remote tip as an ancestor.
+
+Stage 1 is fail-closed: when repository variable `ENABLE_OFFICIAL_TRACKER` is absent or
+not exactly `true`, the tracker workflow runs `--dry-run` and has no write/commit step.
+Manual dispatch is useful for observing candidates but does not bypass this gate:
+
+```powershell
+gh workflow run refresh-2026-model.yml
+gh workflow run update-2026-tracker.yml
+```
+
+Do not set `ENABLE_OFFICIAL_TRACKER` during Stage 1. Stage 2 requires a separate review of
+the proposed game IDs, publication timestamps, frozen lines, model version, edge values,
+and excluded markets, followed by explicit approval in a later action.
+
+If nflverse is unavailable, the command or workflow fails before replacing artifacts.
+Leave the reviewed files in place, wait for recovery, and manually rerun the relevant
+workflow; do not force a partial commit. The website continues with its last cached market
+snapshot marked stale, or the packaged schedule when no live snapshot exists.
+
+To roll back a bad artifact release, revert the exact artifact commit, verify that all
+three files come from one reviewed revision, rerun the full release gate below, and deploy
+that revert. Do not hand-edit Parquet files. If the safe-push ancestor check rejects a
+workflow run, update from the new `master` tip and rerun instead of force-pushing.
 
 ### Reproducible container inputs
 
@@ -202,12 +279,27 @@ fixed and the Render-hostname checks pass again.
 
 ### Release verification and troubleshooting
 
-Run the local test and style suite before accepting a release:
+Run every locally available gate against the exact commit being reviewed:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff format --check src tests scripts
 .\.venv\Scripts\python.exe -m ruff check src tests scripts
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\backtest.py --test-seasons 2021-2025
+.\.venv\Scripts\python.exe scripts\refresh_2026.py --dry-run
+.\.venv\Scripts\python.exe scripts\update_live_tracker.py --dry-run
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 `
+  .github/workflows/refresh-2026-model.yml .github/workflows/update-2026-tracker.yml
+docker build -t nfl-game-model:2026 .
+Get-FileHash data\processed\game_features.parquet,`
+  data\processed\schedule_2026.parquet,`
+  data\processed\tracker_ledger.parquet -Algorithm SHA256
+.\.venv\Scripts\python.exe -c "import pandas as pd; from pathlib import Path; [print(p, len(pd.read_parquet(p))) for p in map(Path, ['data/processed/game_features.parquet', 'data/processed/schedule_2026.parquet', 'data/processed/tracker_ledger.parquet'])]"
 ```
+
+A missing local executable is an unverified gate, not a pass: record it and run it on a
+machine that has the tool before release. Do not install release tools ad hoc on a
+reviewed workstation.
 
 Re-run the statistical acceptance baseline after any artifact refresh. This normalized
 acceptance summary preserves the invariants (the CLI renders `total  MAE` with two spaces).
@@ -232,21 +324,90 @@ The following release gate remains mandatory for the exact reviewed commit accep
 for deployment: Docker and Render must build that exact commit; a container started
 without `ACCESS_CODE` must exit nonzero; with a non-default protected `PORT`, `/health`
 must return `200`, `/` and `/tracker` must return `303` to `/login`, and `/api/options`
-and `/api/tracker/options` must return `401`; the built image must contain both packaged
-Parquet artifacts; and the Render Blueprint must validate and build successfully. Local
-Docker verification was unavailable on the Task 6 workstation, so it is not a passed
-check and must be completed before release.
+and `/api/tracker/options` must return `401`; the built image must contain all three
+packaged Parquet artifacts; and the Render Blueprint must validate and build successfully.
+If Docker, Go/actionlint, or Render validation is unavailable locally, record that exact
+limitation; it remains an unpassed release gate that must be completed before deployment.
 
 If startup reports that `ACCESS_CODE` is required, set a non-empty secret for protected
 mode or use `--no-auth` only for loopback development. If it reports a missing packaged
-dataset or tracker ledger, restore `data/processed/game_features.parquet` and
-`data/processed/tracker_ledger.parquet` from the same accepted revision and rebuild the
-image. A protected page that returns to `/login` over plain HTTP is expected: the secure
+artifact, restore `data/processed/game_features.parquet`,
+`data/processed/schedule_2026.parquet`, and `data/processed/tracker_ledger.parquet` from
+the same accepted revision and rebuild the image. A protected page that returns to
+`/login` over plain HTTP is expected: the secure
 cookie requires HTTPS. A `422` from slate or tracker endpoints usually means a requested
 season, week, estimator, threshold, or record type is not an available valid selection;
 reload `/api/options` or `/api/tracker/options` and choose its advertised values. A `429`
 login response requires waiting for its `Retry-After` interval rather than repeatedly
 retrying.
+
+### 2026 container data smoke
+
+After building `nfl-game-model:2026`, smoke the image internally in loopback-only no-auth
+mode. This does not weaken or replace the production secure-cookie check.
+
+```powershell
+function Wait-NflContainer {
+    param([string]$ContainerName)
+    $probe = "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        docker exec $ContainerName python -c $probe
+        if ($LASTEXITCODE -eq 0) { return }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+    docker logs $ContainerName
+    throw "$ContainerName did not become healthy"
+}
+
+$endpointProbe = @"
+import json
+import urllib.request
+for path in (
+    "/health",
+    "/api/options",
+    "/api/schedule?season=2026",
+    "/api/slate",
+    "/api/tracker/options",
+):
+    with urllib.request.urlopen("http://127.0.0.1:8000" + path, timeout=10) as response:
+        json.load(response)
+    print(path)
+"@
+
+$staleProbe = @"
+import json
+import urllib.request
+with urllib.request.urlopen("http://127.0.0.1:8000/api/slate", timeout=10) as response:
+    payload = json.load(response)
+assert payload["market"]["source"] == "packaged"
+assert payload["market"]["stale"] is True
+"@
+
+docker rm -f nfl-game-smoke nfl-game-stale 2>$null | Out-Null
+docker run -d --name nfl-game-smoke nfl-game-model:2026 python scripts/game_app.py --no-auth
+try {
+    Wait-NflContainer "nfl-game-smoke"
+    docker exec nfl-game-smoke python -c $endpointProbe
+    if ($LASTEXITCODE -ne 0) { throw "connected container smoke failed" }
+} finally {
+    docker rm -f nfl-game-smoke | Out-Null
+}
+
+docker run -d --name nfl-game-stale --network none nfl-game-model:2026 python scripts/game_app.py --no-auth
+try {
+    Wait-NflContainer "nfl-game-stale"
+    docker exec nfl-game-stale python -c $staleProbe
+    if ($LASTEXITCODE -ne 0) { throw "offline fallback smoke failed" }
+} finally {
+    docker rm -f nfl-game-stale | Out-Null
+}
+```
+
+After Stage 1 is deployed behind HTTPS, sign in with the private access code and repeat
+`/api/options`, `/api/schedule?season=2026`, `/api/slate`, and `/api/tracker/options` in
+the authenticated browser session. Confirm the tracker is still read-only and has no
+unapproved live records.
 
 ### Executable Docker and Blueprint gate
 
