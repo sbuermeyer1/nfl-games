@@ -17,6 +17,22 @@ _AUDIT_COLUMNS = [
     "week",
     "away_team",
     "home_team",
+    "published_at",
+    "kickoff_at",
+    "current_kickoff_at",
+    "spread_publication_status",
+    "total_publication_status",
+    "spread_exclusion_reason",
+    "total_exclusion_reason",
+    "published_spread_line",
+    "published_total_line",
+    "closing_spread_line",
+    "closing_total_line",
+    "spread_clv",
+    "total_clv",
+    "spread_close_grade",
+    "total_close_grade",
+    "void_reason",
     "model_margin",
     "official_spread_line",
     "spread_pick",
@@ -134,6 +150,8 @@ def summarize_selection(ledger: pd.DataFrame, record_type: str, season: str | in
 def _json_value(value):
     if value is None or pd.isna(value):
         return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
     if isinstance(value, (float, np.floating)) and not np.isfinite(value):
         return None
     if isinstance(value, np.generic):

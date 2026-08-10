@@ -89,13 +89,14 @@ const auditGames = document.getElementById('audit-games');
 const closingLine = document.getElementById('closing-line');
 
 let activeRecordType = 'backtest';
+let trackerOptions = null;
 let latestSummaryRequest = 0;
 let latestGamesRequest = 0;
 
 function trackerQuery() {
   return new URLSearchParams({
     record_type: activeRecordType,
-    season: activeRecordType === 'live' ? 'all' : season.value,
+    season: season.value,
   }).toString();
 }
 
@@ -125,6 +126,11 @@ async function jsonOrError(url) {
 function formatValue(value) {
   if (value === null || value === undefined) return 'n/a';
   return Number(value).toFixed(1);
+}
+
+function formatText(value) {
+  if (value === null || value === undefined) return 'n/a';
+  return String(value);
 }
 
 function formatRate(value) {
@@ -217,7 +223,7 @@ function renderSummary(body) {
   renderRecordCards(qualifiedCards, body.qualified);
   renderRecordCards(allRecords, body.all_predictions);
   renderSpreadEdges(body.spread_edges);
-  if (activeRecordType === 'backtest' && season.value === 'all' && body.by_season) {
+  if (season.value === 'all' && body.by_season) {
     renderSeasons(body.by_season);
   }
   if (body.closing_line) renderClosingMetrics(body.closing_line);
@@ -229,18 +235,34 @@ function renderGames(games) {
     [
       ['Matchup', game => `${game.away_team} @ ${game.home_team}`],
       ['Week', game => String(game.week)],
+      ['Published at', game => formatText(game.published_at)],
+      ['Kickoff', game => formatText(game.kickoff_at)],
+      ['Current kickoff', game => formatText(game.current_kickoff_at)],
+      ['Void reason', game => formatText(game.void_reason)],
       ['Model margin', game => formatValue(game.model_margin)],
-      ['Spread line', game => formatValue(game.official_spread_line)],
-      ['ATS pick', game => game.spread_pick],
+      ['Spread publication', game => formatText(game.spread_publication_status)],
+      ['Spread exclusion', game => formatText(game.spread_exclusion_reason)],
+      ['Published spread', game => formatValue(game.published_spread_line)],
+      ['Closing spread', game => formatValue(game.closing_spread_line)],
+      ['Official spread', game => formatValue(game.official_spread_line)],
+      ['ATS pick', game => formatText(game.spread_pick)],
       ['ATS edge', game => formatValue(game.spread_edge)],
       ['Final margin', game => formatValue(game.actual_margin)],
-      ['ATS grade', game => game.spread_grade],
+      ['ATS grade', game => formatText(game.spread_grade)],
+      ['Spread CLV', game => formatValue(game.spread_clv)],
+      ['Spread close grade', game => formatText(game.spread_close_grade)],
       ['Model total', game => formatValue(game.model_total)],
-      ['Total line', game => formatValue(game.official_total_line)],
-      ['O/U pick', game => game.total_pick],
+      ['Total publication', game => formatText(game.total_publication_status)],
+      ['Total exclusion', game => formatText(game.total_exclusion_reason)],
+      ['Published total', game => formatValue(game.published_total_line)],
+      ['Closing total', game => formatValue(game.closing_total_line)],
+      ['Official total', game => formatValue(game.official_total_line)],
+      ['O/U pick', game => formatText(game.total_pick)],
       ['O/U edge', game => formatValue(game.total_edge)],
       ['Final total', game => formatValue(game.actual_total)],
-      ['O/U grade', game => game.total_grade],
+      ['O/U grade', game => formatText(game.total_grade)],
+      ['Total CLV', game => formatValue(game.total_clv)],
+      ['Total close grade', game => formatText(game.total_close_grade)],
     ],
     games,
   );
@@ -257,9 +279,6 @@ async function loadSummary() {
   } catch (error) {
     if (request !== latestSummaryRequest || query !== trackerQuery()) return;
     trackerMessage.textContent = error.message;
-  } finally {
-    if (request !== latestSummaryRequest || query !== trackerQuery()) return;
-    season.disabled = activeRecordType === 'live';
   }
 }
 
@@ -281,7 +300,7 @@ async function loadGames() {
 
 async function loadSelection() {
   const requests = [loadSummary()];
-  if (activeRecordType === 'backtest' && season.value !== 'all') requests.push(loadGames());
+  if (season.value !== 'all') requests.push(loadGames());
   await Promise.all(requests);
 }
 
@@ -289,14 +308,14 @@ function selectRecordType(recordType) {
   activeRecordType = recordType;
   historicalTab.setAttribute('aria-selected', recordType === 'backtest' ? 'true' : 'false');
   liveTab.setAttribute('aria-selected', recordType === 'live' ? 'true' : 'false');
-  season.disabled = recordType === 'live';
   invalidateTracker();
+  replaceSeasonOptions(trackerOptions);
   return loadSelection();
 }
 
 function replaceSeasonOptions(options) {
   season.replaceChildren();
-  const years = options.historical_seasons;
+  const years = options.seasons[activeRecordType];
   const overall = document.createElement('option');
   overall.value = 'all';
   overall.textContent = years.length
@@ -317,11 +336,11 @@ function replaceSeasonOptions(options) {
 async function initialize() {
   try {
     const options = await jsonOrError('/api/tracker/options');
-    replaceSeasonOptions(options);
+    trackerOptions = options;
     activeRecordType = options.default_record_type;
+    replaceSeasonOptions(options);
     historicalTab.setAttribute('aria-selected', activeRecordType === 'backtest' ? 'true' : 'false');
     liveTab.setAttribute('aria-selected', activeRecordType === 'live' ? 'true' : 'false');
-    season.disabled = activeRecordType === 'live';
     invalidateTracker();
     await loadSelection();
   } catch (error) {

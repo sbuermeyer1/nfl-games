@@ -33,10 +33,17 @@ class TrackerService:
         return cls(pd.read_parquet(path))
 
     def options(self) -> dict:
-        historical = self._ledger.loc[self._ledger["record_type"] == "backtest", "season"]
         return {
             "record_types": ["backtest", "live"],
-            "historical_seasons": sorted(int(season) for season in historical.unique()),
+            "seasons": {
+                record_type: sorted(
+                    int(value)
+                    for value in self._ledger.loc[
+                        self._ledger["record_type"].eq(record_type), "season"
+                    ].unique()
+                )
+                for record_type in ("backtest", "live")
+            },
             "default_record_type": "backtest",
             "default_season": "all",
             "model_version": HISTORICAL_MODEL_VERSION,

@@ -103,7 +103,7 @@ def live_summary():
 def options():
     return {
         "record_types": ["backtest", "live"],
-        "historical_seasons": [2024, 2025],
+        "seasons": {"backtest": [2024, 2025], "live": []},
         "default_record_type": "backtest",
         "default_season": "all",
         "model_version": "ridge-v1",
@@ -132,6 +132,22 @@ def audit_game(season, away_team, home_team):
         "total_edge": 3.5,
         "actual_total": 50.0,
         "total_grade": "win",
+        "published_at": None,
+        "kickoff_at": None,
+        "current_kickoff_at": None,
+        "spread_publication_status": None,
+        "total_publication_status": None,
+        "spread_exclusion_reason": None,
+        "total_exclusion_reason": None,
+        "published_spread_line": None,
+        "published_total_line": None,
+        "closing_spread_line": 3.0,
+        "closing_total_line": 44.0,
+        "spread_clv": None,
+        "total_clv": None,
+        "spread_close_grade": None,
+        "total_close_grade": None,
+        "void_reason": None,
     }
 
 
@@ -420,6 +436,64 @@ def test_future_live_summary_renders_official_and_closing_line_metrics():
     assert "5-2-1 · 71.4% · n=7" in closing
     assert "n/a" in closing
     assert state["regions"]["audit-games"] == ""
+
+
+def test_live_tab_offers_overall_and_2026_then_fetches_concrete_live_audit():
+    """Catch live selection being locked to overall or skipping concrete live game rows."""
+    live_options = options()
+    live_options["seasons"]["live"] = [2026]
+    live_options["live_available"] = True
+    live_game = audit_game(2026, "LIVE", "TEAM")
+    live_game.update(
+        {
+            "official_spread_line": None,
+            "spread_pick": None,
+            "spread_edge": None,
+            "spread_grade": "no_pick",
+            "spread_publication_status": "excluded",
+            "spread_exclusion_reason": "missing_line_at_deadline",
+            "closing_spread_line": None,
+            "total_publication_status": "pending",
+            "published_at": "2026-09-05T17:00:00+00:00",
+            "current_kickoff_at": "2026-09-06T17:00:00+00:00",
+        }
+    )
+    live_2026_summary = live_summary()
+    live_2026_summary.pop("by_season")
+    live_2026_summary["season"] = 2026
+    responses = {
+        "/api/tracker/options": response(body=live_options),
+        "/api/tracker/summary?record_type=backtest&season=all": response(
+            body=overall_summary()
+        ),
+        "/api/tracker/summary?record_type=live&season=all": response(body=live_summary()),
+        "/api/tracker/summary?record_type=live&season=2026": response(
+            body=live_2026_summary
+        ),
+        "/api/tracker/games?record_type=live&season=2026": response(
+            body={"games": [live_game]}
+        ),
+    }
+    actions = initialize_actions() + [
+        {"type": "fire", "target": "live-tab", "event": "click", "wait": True},
+        {"type": "set", "target": "tracker-season", "value": "2026"},
+        {"type": "fire", "target": "tracker-season", "event": "change", "wait": True},
+    ]
+
+    state = tracker_state(responses, actions)
+
+    assert [option["value"] for option in state["season"]["options"]] == ["all", "2026"]
+    assert state["season"]["value"] == "2026"
+    assert "/api/tracker/summary?record_type=live&season=all" in state["calls"]
+    assert "/api/tracker/summary?record_type=live&season=2026" in state["calls"]
+    assert "/api/tracker/games?record_type=live&season=2026" in state["calls"]
+    audit = state["regions"]["audit-games"]
+    assert "LIVE @ TEAM" in audit
+    assert "excluded" in audit
+    assert "missing_line_at_deadline" in audit
+    assert "pending" in audit
+    assert "n/a" in audit
+    assert state["unhandled"] == []
 
 
 def test_out_of_order_season_responses_cannot_replace_current_selection():

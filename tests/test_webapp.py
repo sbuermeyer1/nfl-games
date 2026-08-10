@@ -131,7 +131,7 @@ class FakeTrackerService:
         self.calls.append(("options",))
         return {
             "record_types": ["backtest", "live"],
-            "historical_seasons": [2024, 2025],
+            "seasons": {"backtest": [2024, 2025], "live": [2026]},
             "default_record_type": "backtest",
             "default_season": "all",
             "model_version": "ridge-v1",
@@ -629,6 +629,9 @@ def test_tracker_routes_forward_exact_selections_and_link_from_slate():
     games = http_client.get(
         "/api/tracker/games", params={"record_type": "backtest", "season": 2025}
     )
+    live_games = http_client.get(
+        "/api/tracker/games", params={"record_type": "live", "season": 2026}
+    )
 
     assert '<a href="/tracker">Performance tracker</a>' in slate_page.text
     assert tracker_page.status_code == 200
@@ -640,10 +643,12 @@ def test_tracker_routes_forward_exact_selections_and_link_from_slate():
         "season": "all",
     }
     assert games.json() == {"games": [{"game_id": "2025_01_AAA_BBB"}]}
+    assert live_games.json() == {"games": [{"game_id": "2025_01_AAA_BBB"}]}
     assert tracker.calls == [
         ("options",),
         ("summary", "backtest", "all"),
         ("records", "backtest", 2025),
+        ("records", "live", 2026),
     ]
 
 

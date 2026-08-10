@@ -51,10 +51,10 @@ def service_ledger(*, include_live=False, missing_actual_total=False, model_vers
                 "official_total_line": 44.0,
                 "published_spread_line": 3.0,
                 "published_total_line": 44.0,
-                "closing_spread_line": 3.0,
-                "closing_total_line": 44.0,
-                "published_at": pd.Timestamp("2026-09-01T12:00:00Z"),
-                "kickoff_at": None,
+                "closing_spread_line": 5.0,
+                "closing_total_line": 45.0,
+                "published_at": pd.Timestamp("2026-09-05T17:00:00Z"),
+                "kickoff_at": pd.Timestamp("2026-09-06T17:00:00Z"),
                 "spread_publication_status": "published",
                 "total_publication_status": "published",
                 "spread_exclusion_reason": pd.NA,
@@ -76,7 +76,7 @@ def test_options_are_fixed_to_the_official_model_and_thresholds():
     options = TrackerService(service_ledger()).options()
     assert options == {
         "record_types": ["backtest", "live"],
-        "historical_seasons": [2024, 2025],
+        "seasons": {"backtest": [2024, 2025], "live": []},
         "default_record_type": "backtest",
         "default_season": "all",
         "model_version": "ridge-v1",
@@ -86,11 +86,25 @@ def test_options_are_fixed_to_the_official_model_and_thresholds():
     }
 
 
-def test_options_keep_historical_seasons_separate_from_live_availability():
+def test_options_keep_historical_and_live_seasons_separate():
     options = TrackerService(service_ledger(include_live=True)).options()
 
-    assert options["historical_seasons"] == [2024, 2025]
+    assert options["seasons"] == {"backtest": [2024, 2025], "live": [2026]}
     assert options["live_available"] is True
+
+
+def test_live_audit_exposes_publication_closing_and_exclusion_facts():
+    row = TrackerService(service_ledger(include_live=True)).records("live", 2026)[0]
+
+    assert row["published_at"] == "2026-09-05T17:00:00+00:00"
+    assert row["kickoff_at"] == "2026-09-06T17:00:00+00:00"
+    assert row["current_kickoff_at"] == "2026-09-06T17:00:00+00:00"
+    assert row["spread_publication_status"] == "published"
+    assert row["spread_exclusion_reason"] is None
+    assert row["published_spread_line"] == 3.0
+    assert row["closing_spread_line"] == 5.0
+    assert row["spread_clv"] == 2.0
+    assert row["spread_close_grade"] == "win"
 
 
 @pytest.mark.parametrize("season", ["", "   ", pd.NA, "2024.0", "2024.5", "twenty-twenty-four"])
@@ -115,7 +129,7 @@ def test_summary_and_records_validate_selections():
 
 def test_advertised_historical_season_returns_its_summary_and_audit_row():
     service = TrackerService(service_ledger())
-    season = service.options()["historical_seasons"][0]
+    season = service.options()["seasons"]["backtest"][0]
 
     summary = service.summary("backtest", season)
     records = service.records("backtest", season)
