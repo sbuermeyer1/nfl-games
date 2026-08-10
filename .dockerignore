@@ -14,3 +14,4 @@ data/*
 data/processed/*
 !data/processed/game_features.parquet
 !data/processed/tracker_ledger.parquet
+!data/processed/schedule_2026.parquet

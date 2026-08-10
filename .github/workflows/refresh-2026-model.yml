@@ -1,0 +1,39 @@
+name: Refresh 2026 model data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 10 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nfl-generated-data-writer
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - run: python scripts/refresh_2026.py --write
+      - run: docker build -t nfl-game-model:refresh .
+      - name: Commit changed artifacts
+        shell: bash
+        run: |
+          git add data/processed/game_features.parquet data/processed/schedule_2026.parquet
+          git diff --cached --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "data: refresh 2026 model artifacts"
+          git fetch origin master
+          git merge-base --is-ancestor origin/master HEAD
+          git push origin HEAD:master

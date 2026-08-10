@@ -77,24 +77,30 @@ def test_load_app_rejects_missing_dataset(tmp_path):
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="packaged dataset not found"):
-        load_app(config, tmp_path / "missing.parquet", tmp_path / "missing-tracker.parquet")
+        load_app(
+            config,
+            tmp_path / "missing.parquet",
+            tmp_path / "missing-tracker.parquet",
+            tmp_path / "missing-schedule.parquet",
+        )
 
 
 def test_load_app_wraps_parquet_read_failure(tmp_path, monkeypatch):
     """Catch corrupt packaged data escaping as an unhelpful startup exception."""
+    schedule = write_schedule_artifact(tmp_path)
     dataset = tmp_path / "broken.parquet"
     tracker = tmp_path / "tracker.parquet"
     dataset.write_bytes(b"not parquet")
     tracker.touch()
 
-    def fail(path):
+    def fail(path, packaged_schedule=None, market_provider=None):
         raise ValueError("invalid parquet footer")
 
     monkeypatch.setattr("nfl_game.web.runtime.SlateService.from_parquet", fail)
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="cannot load packaged dataset") as caught:
-        load_app(config, dataset, tracker)
+        load_app(config, dataset, tracker, schedule)
     assert "invalid parquet footer" in str(caught.value)
 
 
@@ -139,11 +145,12 @@ def test_load_app_wraps_invalid_dataset_schema(tmp_path, column, value, expected
     dataset = tmp_path / "invalid.parquet"
     tracker = tmp_path / "tracker.parquet"
     rows.to_parquet(dataset)
+    schedule = write_schedule_artifact(tmp_path)
     tracker.touch()
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="cannot load packaged dataset") as caught:
-        load_app(config, dataset, tracker)
+        load_app(config, dataset, tracker, schedule)
 
     assert expected in str(caught.value)
 
@@ -155,7 +162,12 @@ def test_load_app_rejects_missing_tracker_ledger(tmp_path):
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="packaged tracker ledger not found"):
-        load_app(config, dataset, tmp_path / "missing-tracker.parquet")
+        load_app(
+            config,
+            dataset,
+            tmp_path / "missing-tracker.parquet",
+            tmp_path / "schedule.parquet",
+        )
 
 
 def test_load_app_wraps_tracker_parquet_read_failure(tmp_path, monkeypatch):
@@ -164,6 +176,7 @@ def test_load_app_wraps_tracker_parquet_read_failure(tmp_path, monkeypatch):
     tracker = tmp_path / "broken-tracker.parquet"
     startup_feature_rows().to_parquet(dataset)
     tracker.write_bytes(b"not parquet")
+    schedule = write_schedule_artifact(tmp_path)
 
     def fail(path):
         raise ValueError("invalid tracker parquet footer")
@@ -172,10 +185,56 @@ def test_load_app_wraps_tracker_parquet_read_failure(tmp_path, monkeypatch):
     config = resolve_runtime(no_auth=True, environ={})
 
     with pytest.raises(RuntimeConfigError, match="cannot load packaged tracker ledger") as caught:
-        load_app(config, dataset, tracker)
+        load_app(config, dataset, tracker, schedule)
 
     assert "invalid tracker parquet footer" in str(caught.value)
     assert isinstance(caught.value.__cause__, ValueError)
+
+
+def write_feature_artifact(tmp_path):
+    """Copy a production-valid feature artifact for startup boundary tests."""
+    destination = tmp_path / "features.parquet"
+    destination.write_bytes((PROCESSED_DIR / "game_features.parquet").read_bytes())
+    return destination
+
+
+def write_tracker_artifact(tmp_path):
+    """Copy a production-valid tracker artifact for startup boundary tests."""
+    destination = tmp_path / "tracker.parquet"
+    destination.write_bytes((PROCESSED_DIR / "tracker_ledger.parquet").read_bytes())
+    return destination
+
+
+def write_schedule_artifact(tmp_path):
+    """Copy a production-valid schedule artifact for startup boundary tests."""
+    destination = tmp_path / "schedule.parquet"
+    destination.write_bytes((PROCESSED_DIR / "schedule_2026.parquet").read_bytes())
+    return destination
+
+
+def test_load_app_rejects_missing_packaged_2026_schedule(tmp_path):
+    """Catch startup continuing without the packaged schedule fallback."""
+    dataset = write_feature_artifact(tmp_path)
+    tracker = write_tracker_artifact(tmp_path)
+
+    with pytest.raises(RuntimeConfigError, match="packaged 2026 schedule not found"):
+        load_app(
+            resolve_runtime(no_auth=True, environ={}),
+            dataset,
+            tracker,
+            tmp_path / "missing-schedule.parquet",
+        )
+
+
+def test_load_app_wraps_invalid_schedule_schema(tmp_path):
+    """Catch an invalid packaged schedule escaping as an unsafe startup error."""
+    dataset = write_feature_artifact(tmp_path)
+    tracker = write_tracker_artifact(tmp_path)
+    schedule = tmp_path / "schedule.parquet"
+    pd.DataFrame({"bad": [1]}).to_parquet(schedule)
+
+    with pytest.raises(RuntimeConfigError, match="cannot load packaged 2026 schedule"):
+        load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
 
 
 def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):
@@ -221,8 +280,8 @@ def test_entrypoint_passes_resolved_runtime_to_loader_and_server(
     loader_calls = []
     server_calls = []
 
-    def load_app_without_starting_server(config, dataset_path, tracker_path):
-        loader_calls.append((config, dataset_path, tracker_path))
+    def load_app_without_starting_server(config, dataset_path, tracker_path, schedule_path):
+        loader_calls.append((config, dataset_path, tracker_path, schedule_path))
         return app
 
     def record_server_start(server_app, *, host, port):
@@ -238,6 +297,7 @@ def test_entrypoint_passes_resolved_runtime_to_loader_and_server(
             expected_config,
             PROCESSED_DIR / "game_features.parquet",
             PROCESSED_DIR / "tracker_ledger.parquet",
+            PROCESSED_DIR / "schedule_2026.parquet",
         )
     ]
     assert server_calls == [(app, expected_config.host, expected_config.port)]

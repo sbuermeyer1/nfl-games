@@ -23,6 +23,7 @@ def main(argv=None) -> None:
             config,
             PROCESSED_DIR / "game_features.parquet",
             PROCESSED_DIR / "tracker_ledger.parquet",
+            PROCESSED_DIR / "schedule_2026.parquet",
         )
     except RuntimeConfigError as exc:
         parser.error(str(exc))
