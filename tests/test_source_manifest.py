@@ -76,6 +76,17 @@ def test_require_coverage_rejects_below_ninety_percent():
         require_coverage(frame, ["rating"], minimum=0.90)
 
 
+def test_require_coverage_rejects_a_season_masked_by_aggregate_coverage():
+    frame = pd.DataFrame(
+        {
+            "season": [2023] * 10 + [2024] * 10,
+            "rating": [1.0] * 18 + [np.nan] * 2,
+        }
+    )
+
+    with pytest.raises(SourceContractError, match=r"season 2024.*0\.8000"):
+        require_coverage(frame, ["rating"], minimum=0.90)
+
 def test_numeric_coverage_rejects_missing_columns():
     with pytest.raises(SourceContractError, match=r"missing source columns: \['rating'\]"):
         numeric_coverage(pd.DataFrame({"team": ["BUF"]}), ["rating"])
@@ -118,6 +129,15 @@ def test_read_source_manifest_rejects_snapshot_values_that_cannot_round_trip(tmp
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(SourceContractError, match="schema_sha256 must be a string"):
+        read_source_manifest(path)
+
+def test_read_source_manifest_rejects_list_shaped_coverage(tmp_path):
+    path = tmp_path / "sources.json"
+    payload = snapshot_payload(snapshot())
+    payload["snapshots"][0]["coverage"] = [["rating", 1.0]]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SourceContractError, match="coverage must be a dictionary"):
         read_source_manifest(path)
 
 def test_write_json_atomic_preserves_existing_file_when_replacement_fails(tmp_path, monkeypatch):

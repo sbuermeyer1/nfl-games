@@ -84,12 +84,23 @@ def require_coverage(
     frame: pd.DataFrame, columns: Sequence[str], minimum: float = 0.90
 ) -> None:
     """Raise when any required source column has insufficient numeric coverage."""
-    coverage = numeric_coverage(frame, columns)
-    below = {name: value for name, value in coverage.items() if value < minimum}
-    if below:
-        formatted = ", ".join(f"{name!r}: {value:.4f}" for name, value in below.items())
-        raise SourceContractError(f"coverage below {minimum:.4f}: {{{formatted}}}")
+    if "season" not in frame:
+        _require_minimum_coverage(numeric_coverage(frame, columns), minimum)
+        return
 
+    for season, season_frame in frame.groupby("season", dropna=False):
+        _require_minimum_coverage(numeric_coverage(season_frame, columns), minimum, season=season)
+
+
+def _require_minimum_coverage(
+    coverage: Mapping[str, float], minimum: float, *, season: object | None = None
+) -> None:
+    below = {name: value for name, value in coverage.items() if value < minimum}
+    if not below:
+        return
+    formatted = ", ".join(f"{name!r}: {value:.4f}" for name, value in below.items())
+    prefix = f" for season {season}" if season is not None else ""
+    raise SourceContractError(f"coverage below {minimum:.4f}{prefix}: {{{formatted}}}")
 
 def write_json_atomic(payload: Mapping[str, object], path: Path) -> None:
     """Atomically replace *path* with canonical JSON, preserving an existing file on failure."""
@@ -137,6 +148,8 @@ def _snapshot_from_payload(record: object) -> SourceSnapshot:
     }
     if not isinstance(record, dict) or set(record) != fields:
         raise SourceContractError("source manifest snapshot fields are invalid")
+    if not isinstance(record["coverage"], dict):
+        raise SourceContractError("source snapshot coverage must be a dictionary")
     try:
         retrieved_at = datetime.fromisoformat(record["retrieved_at"])
         latest_value = record["latest_event_at"]
