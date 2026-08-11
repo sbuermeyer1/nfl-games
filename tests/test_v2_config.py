@@ -68,6 +68,25 @@ def test_manifest_rejects_market_features():
         )
 
 
+@pytest.mark.parametrize("market_probability", ("cover_prob", "over_prob"))
+@pytest.mark.parametrize("target", ("margin", "total"))
+def test_manifest_rejects_market_probability_features(target, market_probability):
+    feature_lists = {
+        "margin": {"C1": ("rating_diff",)},
+        "total": {"C1": ("pace_sum",)},
+    }
+    feature_lists[target] = {"C1": (market_probability,)}
+
+    with pytest.raises(ValueError, match="market probability column"):
+        FeatureManifest(
+            version="ridge-v2-test",
+            margin_by_candidate=feature_lists["margin"],
+            total_by_candidate=feature_lists["total"],
+            sources={},
+            constants={},
+        )
+
+
 def test_manifest_round_trips_through_json_compatible_dictionary():
     manifest = FeatureManifest(
         version="ridge-v2-test",

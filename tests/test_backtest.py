@@ -34,6 +34,8 @@ def test_ridge_v1_real_artifact_remains_frozen():
     assert metrics["ats_hit_rate"] == pytest.approx(0.4977375566, abs=5e-7)
     assert metrics["ou_hit_rate"] == pytest.approx(0.5022255193, abs=5e-7)
 
+    assert market_comparison_regression(preds)["model_coef"] == pytest.approx(-0.0218, abs=5e-5)
+
 
 def test_walk_forward_only_scores_test_seasons():
     out = walk_forward(_features(), test_seasons=[2022, 2023])

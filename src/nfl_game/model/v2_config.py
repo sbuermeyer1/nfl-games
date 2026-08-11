@@ -9,6 +9,7 @@ ALPHAS = (0.1, 1.0, 10.0, 100.0)
 RATING_WINDOWS = ((4, 16), (8, 24), (12, 32))
 PRIOR_SEASON_WEIGHTS = (0.4, 0.6, 0.8)
 MARKET_COLUMNS = frozenset({"spread_line", "total_line", "away_moneyline", "home_moneyline"})
+MARKET_PROBABILITY_COLUMNS = frozenset({"cover_prob", "over_prob"})
 
 
 @dataclass(frozen=True, order=True)
@@ -47,6 +48,12 @@ class FeatureManifest:
                 if overlap:
                     raise ValueError(
                         f"market column in {target}/{candidate}: {sorted(overlap)}"
+                    )
+                probability_overlap = MARKET_PROBABILITY_COLUMNS.intersection(columns)
+                if probability_overlap:
+                    raise ValueError(
+                        "market probability column "
+                        f"in {target}/{candidate}: {sorted(probability_overlap)}"
                     )
 
     def columns(self, target: str, candidate: str) -> tuple[str, ...]:
