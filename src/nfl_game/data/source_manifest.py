@@ -84,7 +84,7 @@ def require_coverage(
     frame: pd.DataFrame, columns: Sequence[str], minimum: float = 0.90
 ) -> None:
     """Raise when any required source column has insufficient numeric coverage."""
-    if "season" not in frame:
+    if frame.empty or "season" not in frame:
         _require_minimum_coverage(numeric_coverage(frame, columns), minimum)
         return
 

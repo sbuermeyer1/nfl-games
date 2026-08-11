@@ -87,6 +87,17 @@ def test_require_coverage_rejects_a_season_masked_by_aggregate_coverage():
     with pytest.raises(SourceContractError, match=r"season 2024.*0\.8000"):
         require_coverage(frame, ["rating"], minimum=0.90)
 
+def test_require_coverage_rejects_empty_seasonal_frame():
+    frame = pd.DataFrame(
+        {
+            "season": pd.Series(dtype="int64"),
+            "rating": pd.Series(dtype="float64"),
+        }
+    )
+
+    with pytest.raises(SourceContractError, match="0.0000"):
+        require_coverage(frame, ["rating"], minimum=0.90)
+
 def test_numeric_coverage_rejects_missing_columns():
     with pytest.raises(SourceContractError, match=r"missing source columns: \['rating'\]"):
         numeric_coverage(pd.DataFrame({"team": ["BUF"]}), ["rating"])
