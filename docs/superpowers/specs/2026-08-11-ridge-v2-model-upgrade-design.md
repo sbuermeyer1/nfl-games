@@ -241,7 +241,11 @@ before production use.
 
 ## Target-specific schemas
 
-The exact columns are finalized before the outer evaluation, but their roles are fixed here.
+Each feature-block implementation produces a versioned manifest containing its exact columns,
+formulas, constants, source fields, and missing-value rules. A manifest is frozen after source
+profiling and before any outer-fold result for that block is generated. Changing a frozen
+manifest creates a new named candidate experiment; it cannot silently replace an evaluated
+candidate. The feature roles are fixed here.
 
 ### Margin model
 
@@ -305,9 +309,23 @@ The selected configuration may evolve as additional seasons become available. Th
 the declared algorithm, not post-hoc tuning. The report records the configuration selected for
 every outer season.
 
-The implementation plan must define a small finite grid before results are generated. It may
-cover separate Ridge penalties, short/long rating half-lives, and preseason shrinkage. It must
-not grow into an open-ended hyperparameter search.
+The finite tuning grid is:
+
+- Margin Ridge `alpha`: `0.1`, `1.0`, `10.0`, or `100.0`
+- Total Ridge `alpha`: `0.1`, `1.0`, `10.0`, or `100.0`
+- Paired short/long rating half-lives in games: `(4, 16)`, `(8, 24)`, or `(12, 32)`
+- Prior-season weight: `0.4`, `0.6`, or `0.8`
+
+Ridge v1 remains a fixed C0 configuration with its current schema and `alpha=1.0`; it is not
+reinterpreted through the v2 grid. All other transformation constants are frozen in the
+feature manifest and are not tuned.
+
+Candidate selection runs independently for margin and total. A candidate must have at least
+two inner validation seasons and 400 total inner validation games to be eligible. Configurations
+are scored by mean MAE with each inner season weighted equally. To resist needless complexity,
+selection chooses the lowest-numbered candidate within 0.05 points of the best eligible mean
+MAE. Within that candidate it chooses the lowest-MAE configuration; exact numeric ties use the
+lexicographically sorted serialized configuration, making selection deterministic.
 
 ## Block eligibility
 
@@ -451,14 +469,15 @@ eligible 2021–2025 out-of-sample Ridge-v2 prediction corpus.
 ## Artifacts and versioning
 
 Ridge-v1 artifacts remain frozen and retain their current names and exact acceptance metrics.
-Ridge-v2 writes separate challenger artifacts during research. The implementation plan will
-choose final filenames, but the logical separation is mandatory:
+Ridge-v2 writes separate challenger artifacts during research:
 
-- Ridge-v2 features/configuration manifest
-- Ridge-v2 outer-fold predictions
-- Ridge-v2 evaluation and ablation report
-- Ridge-v2 calibration parameters
-- Ridge-v2 historical tracker ledger, created only after promotion approval
+- `data/processed/game_features_ridge_v2.parquet`
+- `data/processed/ridge_v2_manifest.json`
+- `data/processed/ridge_v2_outer_predictions.parquet`
+- `data/processed/ridge_v2_evaluation.json`
+- `data/processed/ridge_v2_ablation.parquet`
+- `data/processed/ridge_v2_calibration.json`
+- `data/processed/tracker_ledger_ridge_v2.parquet`, created only after promotion approval
 
 Every artifact records a model version, feature-schema version, source manifest digest, and
 build timestamp.
