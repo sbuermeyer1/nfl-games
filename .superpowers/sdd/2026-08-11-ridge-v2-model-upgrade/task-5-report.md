@@ -58,3 +58,30 @@
   always removes nonpositive weeks.
 - Re-normalizing an already normalized depth history now recognizes `rank` before raw source
   rank fields, preserving the source chronology and rank-one starter selection.
+## Review fix round 2
+
+### RED / GREEN evidence
+
+- Added a mixed normalized/raw 2025 depth-history regression. It combines a normalized
+  rank-1 `z-starter` row with raw rank-2 `a-backup` and rank-1 opposing-QB rows, each at the
+  same eligible timestamp. RED returned no A rows because global rank-column selection and
+  position filtering discarded mixed-source values.
+- GREEN coalesces `rank`, `depth_chart_position`, `depth_chart_rank`,
+  `depth_chart_order`, and `depth` per row (in that precedence order), preserving normalized
+  rank first and retaining both eligible A rows. The expected starter remains `z-starter`.
+
+### Verification
+
+- `python -m pytest tests/test_qb.py -v --basetemp .venv\\pytest-tmp`: 11 passed.
+- `python -m pytest -q --basetemp .venv\\pytest-tmp`: 497 passed (3 pre-existing dependency/runtime warnings).
+- `python -m ruff check .`: passed.
+- `git diff --check HEAD`: passed.
+
+### Self-review
+
+- Rank precedence is now applied per row, preventing sparse normalized `rank` values from
+  blanking valid legacy rank values in a concatenated history.
+- A source `position` column only excludes explicitly non-QB rows; normalized rows that do
+  not carry this raw-only column remain valid when mixed with raw rows.
+- Timestamp and season/week chronology remain unchanged; the fix only normalizes field
+  representation before eligibility is evaluated.

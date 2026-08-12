@@ -80,15 +80,17 @@ def normalize_depth_chart_history(depth_charts: pd.DataFrame, schedules: pd.Data
     rows = depth_charts.copy()
     position = next((name for name in ("position", "position_group") if name in rows), None)
     if position is not None:
-        rows = rows[rows[position].eq("QB")]
-    rank = next(
-        (name for name in ("rank", "depth_chart_position", "depth_chart_rank", "depth_chart_order", "depth") if name in rows),
-        None,
-    )
-    if rank is None:
+        rows = rows[rows[position].isna() | rows[position].eq("QB")]
+    rank_columns = [
+        name
+        for name in ("rank", "depth_chart_position", "depth_chart_rank", "depth_chart_order", "depth")
+        if name in rows
+    ]
+    if not rank_columns:
         rows["rank"] = 1
     else:
-        rows["rank"] = pd.to_numeric(rows[rank], errors="coerce")
+        numeric_ranks = rows[rank_columns].apply(pd.to_numeric, errors="coerce")
+        rows["rank"] = numeric_ranks.bfill(axis=1).iloc[:, 0]
     if "dt" not in rows:
         rows["dt"] = pd.NaT
     rows["dt"] = pd.to_datetime(rows["dt"], utc=True, errors="coerce")

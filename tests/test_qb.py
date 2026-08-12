@@ -128,6 +128,28 @@ def test_normalized_depth_history_keeps_rank_one_starter_when_composed_publicly(
     assert out.set_index("team").loc["A", "expected_starter_id"] == "z-starter"
 
 
+def test_mixed_normalized_and_raw_depth_history_coalesces_per_row_ranks():
+    weeks = qb_week_stats(_player_stats())
+    normalized = normalize_depth_chart_history(
+        pd.DataFrame(
+            [{"season": 2025, "week": 3, "team": "A", "position": "QB", "depth_chart_position": 1, "player_id": "z-starter", "dt": "2025-09-20T12:00:00Z"}]
+        ),
+        _schedules(),
+    )
+    raw = pd.DataFrame(
+        [
+            {"season": 2025, "week": 3, "team": "A", "position": "QB", "depth_chart_position": 2, "player_id": "a-backup", "dt": "2025-09-20T12:00:00Z"},
+            {"season": 2025, "week": 3, "team": "B", "position": "QB", "depth_chart_position": 1, "player_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
+        ]
+    )
+    history = normalize_depth_chart_history(pd.concat([normalized, raw], ignore_index=True), _schedules())
+    a_rows = history[history["team"].eq("A")].sort_values("rank")
+    assert a_rows[["player_id", "rank"]].values.tolist() == [["z-starter", 1], ["a-backup", 2]]
+    assert a_rows["dt"].tolist() == [pd.Timestamp("2025-09-20T12:00:00Z")] * 2
+    out = qb_features_for_targets(weeks, history, _schedules(), [(2025, 4)])
+    assert out.set_index("team").loc["A", "expected_starter_id"] == "z-starter"
+
+
 def test_future_depth_snapshot_cannot_change_expected_starter():
     weeks = qb_week_stats(_player_stats())
     before = qb_features_for_targets(weeks, _depth_history(), _schedules(), [(2025, 4)])
