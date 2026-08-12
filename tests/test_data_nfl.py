@@ -251,3 +251,19 @@ def test_new_loaders_can_skip_cache_writes(monkeypatch, tmp_path, loader_name, s
     getattr(nfl, loader_name)(*arguments, save=False)
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_load_players_without_season_can_skip_cache_writes(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(nfl, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(
+        nfl.nflreadpy,
+        "load_players",
+        lambda: calls.append(()) or FakePolars(pd.DataFrame({"gsis_id": ["00-003"]})),
+    )
+
+    out = nfl.load_players(save=False)
+
+    assert isinstance(out, pd.DataFrame)
+    assert calls == [()]
+    assert list(tmp_path.iterdir()) == []
