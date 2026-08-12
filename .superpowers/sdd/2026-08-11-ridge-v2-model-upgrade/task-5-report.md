@@ -34,3 +34,27 @@
   prior-game fallback, schedule-QB leakage, and target output keys.
 - The depth source's documented 2025+ `dt` cadence is treated as the availability timestamp;
   older charts remain bounded by their supplied season/week because they lack equivalent history.
+
+## Review fix round 1
+
+### RED / GREEN evidence
+
+- Added a public-composition test that passes normalized 2025 depth history containing
+  rank-1 `z-starter` and rank-2 `a-backup` into `qb_features_for_targets()`. RED selected
+  `a-backup`; GREEN preserves the normalized `rank` and selects `z-starter`.
+- Added regular-season coverage with a week-zero REG row and a week-19 POST row. RED emitted
+  both rows; GREEN retains only the three positive-week REG baseline QBs.
+
+### Verification
+
+- `python -m pytest tests/test_qb.py -v --basetemp .venv\\pytest-tmp`: 10 passed.
+- `python -m pytest -q --basetemp .venv\\pytest-tmp`: 496 passed (3 pre-existing dependency/runtime warnings).
+- `python -m ruff check .`: passed.
+- `git diff --check HEAD`: passed.
+
+### Self-review
+
+- `qb_week_stats()` filters `season_type == "REG"` only when that source column exists and
+  always removes nonpositive weeks.
+- Re-normalizing an already normalized depth history now recognizes `rank` before raw source
+  rank fields, preserving the source chronology and rank-one starter selection.

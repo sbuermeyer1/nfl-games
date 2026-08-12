@@ -41,6 +41,10 @@ def qb_week_stats(player_stats: pd.DataFrame) -> pd.DataFrame:
     required = {"season", "week", "team", "player_id", "attempts", "sacks_suffered"}
     if not required.issubset(rows.columns):
         return pd.DataFrame(columns=columns)
+    if "season_type" in rows:
+        rows = rows[rows["season_type"].eq("REG")]
+    rows["week"] = pd.to_numeric(rows["week"], errors="coerce")
+    rows = rows[rows["week"].gt(0)]
     for name in ("passing_epa", "passing_cpoe", "passing_interceptions"):
         rows[name] = pd.to_numeric(rows.get(name, 0), errors="coerce").fillna(0.0)
     rows["attempts"] = pd.to_numeric(rows["attempts"], errors="coerce").fillna(0.0)
@@ -78,7 +82,7 @@ def normalize_depth_chart_history(depth_charts: pd.DataFrame, schedules: pd.Data
     if position is not None:
         rows = rows[rows[position].eq("QB")]
     rank = next(
-        (name for name in ("depth_chart_position", "depth_chart_rank", "depth_chart_order", "depth") if name in rows),
+        (name for name in ("rank", "depth_chart_position", "depth_chart_rank", "depth_chart_order", "depth") if name in rows),
         None,
     )
     if rank is None:

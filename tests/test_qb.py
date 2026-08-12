@@ -50,6 +50,24 @@ def test_qb_week_stats_uses_attempts_plus_sacks_as_dropbacks():
     assert out.loc["qb-a", "epa_per_db"] == pytest.approx(8.8 / 44)
 
 
+def test_qb_week_stats_excludes_postseason_and_nonpositive_weeks():
+    stats = pd.concat(
+        [
+            _player_stats().assign(season_type="REG"),
+            pd.DataFrame(
+                [
+                    {"season": 2024, "week": 0, "team": "A", "player_id": "week-zero", "position": "QB", "season_type": "REG", "attempts": 30, "sacks_suffered": 0, "passing_epa": 30, "passing_cpoe": 0, "passing_interceptions": 0},
+                    {"season": 2024, "week": 19, "team": "A", "player_id": "post-qb", "position": "QB", "season_type": "POST", "attempts": 30, "sacks_suffered": 0, "passing_epa": 30, "passing_cpoe": 0, "passing_interceptions": 0},
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    out = qb_week_stats(stats)
+    assert set(out["player_id"]) == {"qb-a", "qb-b", "qb-c"}
+    assert (out["week"] > 0).all()
+
+
 def test_small_sample_rates_shrink_toward_league():
     weeks = qb_week_stats(_player_stats())
     out = qb_features_for_targets(weeks, _depth_history(), _schedules(), [(2024, 2)])
@@ -94,6 +112,20 @@ def test_2025_depth_history_uses_timestamp_as_of_target_kickoff():
     history = normalize_depth_chart_history(depth, _schedules())
     out = qb_features_for_targets(weeks, history, _schedules(), [(2025, 4)])
     assert out.set_index("team").loc["A", "expected_starter_id"] == "qb-b"
+
+
+def test_normalized_depth_history_keeps_rank_one_starter_when_composed_publicly():
+    weeks = qb_week_stats(_player_stats())
+    depth = pd.DataFrame(
+        [
+            {"season": 2025, "week": 3, "team": "A", "position": "QB", "depth_chart_position": 1, "player_id": "z-starter", "dt": "2025-09-20T12:00:00Z"},
+            {"season": 2025, "week": 3, "team": "A", "position": "QB", "depth_chart_position": 2, "player_id": "a-backup", "dt": "2025-09-20T12:00:00Z"},
+            {"season": 2025, "week": 3, "team": "B", "position": "QB", "depth_chart_position": 1, "player_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
+        ]
+    )
+    history = normalize_depth_chart_history(depth, _schedules())
+    out = qb_features_for_targets(weeks, history, _schedules(), [(2025, 4)])
+    assert out.set_index("team").loc["A", "expected_starter_id"] == "z-starter"
 
 
 def test_future_depth_snapshot_cannot_change_expected_starter():
