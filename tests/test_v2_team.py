@@ -32,6 +32,29 @@ def pbp_fixture():
     return out
 
 
+def multi_game_pbp_fixture():
+    first = pbp_fixture()
+    second = first.copy()
+    second["game_id"] = "2024_02_ARI_BUF"
+    second["week"] = 2
+    second["home_team"] = "ARI"
+    return pd.concat([first, second], ignore_index=True)
+
+
+def test_team_game_v2_returns_one_offensive_row_per_game_team_with_key_schema():
+    out = team_game_v2(multi_game_pbp_fixture())
+    keys = out[["season", "week", "team"]]
+
+    assert len(out) == 4
+    assert set(map(tuple, keys.to_numpy())) == {
+        (2024, 1, "ARI"),
+        (2024, 1, "BUF"),
+        (2024, 2, "ARI"),
+        (2024, 2, "BUF"),
+    }
+    assert not keys.duplicated().any()
+
+
 def test_neutral_and_early_down_filters_are_fixed():
     out = team_game_v2(pbp_fixture()).set_index("team")
 
@@ -77,6 +100,37 @@ def test_short_ratings_react_more_strongly_to_recent_game():
     out = v2_team_ratings(team_games(), [(2024, 4)], 4, 16, 0.6).set_index("team")
 
     assert out.loc["A", "short_off_epa_play"] > out.loc["A", "long_off_epa_play"]
+
+
+def defensive_team_games():
+    allowed = {"A": -1.0, "B": 1.0, "C": -0.5, "D": 0.5}
+    matchups = (
+        (("A", "B"), ("C", "D")),
+        (("A", "C"), ("B", "D")),
+        (("A", "D"), ("B", "C")),
+    )
+    rows = []
+    for week, games in enumerate(matchups, start=1):
+        for home, away in games:
+            for team, opponent, is_home in ((home, away, 1), (away, home, 0)):
+                row = {
+                    "game_id": f"2024_{week}_{away}_{home}",
+                    "season": 2024,
+                    "week": week,
+                    "team": team,
+                    "opponent": opponent,
+                    "is_home": is_home,
+                }
+                row.update({target: allowed[opponent] for target in V2_RATING_TARGETS})
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_defensive_ratings_remain_higher_is_better_in_both_windows():
+    out = v2_team_ratings(defensive_team_games(), [(2024, 4)], 4, 16, 0.6).set_index("team")
+
+    assert out.loc["A", "short_def_epa_play"] > out.loc["B", "short_def_epa_play"]
+    assert out.loc["A", "long_def_epa_play"] > out.loc["B", "long_def_epa_play"]
 
 
 def test_all_rating_columns_use_window_prefixes():
