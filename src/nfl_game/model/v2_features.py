@@ -17,6 +17,58 @@ from nfl_game.model.v2_config import CANDIDATES, FeatureManifest
 GAME_KEYS = ("game_id", "season", "week")
 TEAM_WEEK_KEYS = ("season", "week", "team")
 
+_RATING_TARGETS = (
+    "epa_play",
+    "epa_pass",
+    "epa_rush",
+    "success_rate",
+    "early_down_epa",
+    "neutral_epa",
+    "explosive_pass_rate",
+    "explosive_rush_rate",
+)
+RAW_NEUTRAL_PRIORS = {
+    **{
+        f"{window}_{unit}_{target}": 0.0
+        for window in ("short", "long")
+        for unit in ("off", "def")
+        for target in _RATING_TARGETS
+    },
+    "qb_epa_per_db": 0.0,
+    "qb_cpoe": 0.0,
+    "qb_sack_rate": 0.065,
+    "qb_int_rate": 0.025,
+    "qb_change_epa": 0.0,
+    "qb_new_starter": 0.0,
+    "qb_rookie": 0.0,
+    "qb_uncertain": 1.0,
+    "neutral_pass_rate": 0.55,
+    "pace_seconds": 28.0,
+    "turnover_rate": 0.025,
+    "explosive_play_rate": 0.10,
+    "starting_field_position": 25.0,
+    "special_teams_epa": 0.0,
+    "style_imputed": 1.0,
+    "off_returning_share": 0.70,
+    "def_returning_share": 0.70,
+    "off_snap_hhi": 0.10,
+    "def_snap_hhi": 0.10,
+    "depth_chart_change_rate": 0.10,
+    "roster_churn": 0.30,
+    "personnel_imputed": 1.0,
+    "pfr_pressure_rate": 0.25,
+    "pfr_bad_throw_rate": 0.15,
+    "pfr_drop_rate": 0.05,
+    "pfr_rec_drop_rate": 0.05,
+    "pfr_rush_ybc": 2.5,
+    "pfr_rush_yac": 2.5,
+    "pfr_broken_tackle_rate": 0.10,
+    "pfr_def_missed_tackle_rate": 0.10,
+    "pfr_def_pressure_rate": 0.25,
+    "pfr_imputed": 1.0,
+}
+
+
 MARGIN_FEATURES_BY_BLOCK = {
     "C0": tuple(FEATURE_COLS),
     "C1": (
@@ -132,43 +184,176 @@ TOTAL_FEATURES_BY_BLOCK = {
 }
 
 DEFAULT_SOURCES = {
-    "C0": "ridge-v1-feature-cols",
-    "C1": "nflverse-play-by-play-team-ratings",
-    "C2": "nflverse-player-stats-and-depth-charts",
-    "C3": "nflverse-play-by-play-style",
-    "C4": "nflverse-rosters-depth-charts-and-snap-counts",
-    "C5": "nflverse-pfr-advanced-weekly",
+    "C0": "ridge-v1-feature-cols@v1",
+    "C1": "nflverse-pbp-team-ratings@v1|nflreadpy@0.1.5",
+    "C2": "nflverse-player-stats-depth-charts@v1|nflreadpy@0.1.5",
+    "C3": "nflverse-pbp-style@v1|nflreadpy@0.1.5",
+    "C4": "nflverse-rosters-depth-snap-counts@v1|nflreadpy@0.1.5",
+    "C5": "nflverse-pfr-advanced-weekly@v1|nflreadpy@0.1.5",
 }
 DEFAULT_CONSTANTS: dict[str, object] = {
-    "block_neutral_fill": 0.0,
+    "raw_neutral_priors": RAW_NEUTRAL_PRIORS,
     "c5_production_eligible": False,
     "pfr_rec_drop_rate_coverage_2025": 0.6912,
 }
 
+
+def _matchup_formula(raw: str, window: str, operation: str) -> str:
+    home_edge = f"home.{window}_off_{raw} - away.{window}_def_{raw}"
+    away_edge = f"away.{window}_off_{raw} - home.{window}_def_{raw}"
+    return f"({home_edge}) {operation} ({away_edge})"
+
+
+def _sided_formula(raw: str, operation: str) -> str:
+    return f"home.{raw} {operation} away.{raw}"
+
+
 FEATURE_FORMULAS = {
-    **{f"C0.{column}": "unchanged Ridge-v1 feature" for column in FEATURE_COLS},
-    "rating_net_diff": "(home_off + home_def) - (away_off + away_def)",
-    "rating_matchup_diff": "(home_off-away_def) - (away_off-home_def)",
-    "rating_matchup_sum": "(home_off-away_def) + (away_off-home_def)",
-    "difference": "home - away",
-    "sum": "home + away",
-    "mean": "(home + away) / 2",
-    "minimum": "min(home, away)",
-    "any": "max(home, away, missing-side-indicator)",
+    **{
+        f"rating_net_diff_{window}": (
+            f"home.{window}_off_epa_play + home.{window}_def_epa_play "
+            f"- away.{window}_off_epa_play - away.{window}_def_epa_play"
+        )
+        for window in ("short", "long")
+    },
+    **{
+        f"{name}_matchup_{kind}_{window}": _matchup_formula(
+            raw, window, "-" if kind == "diff" else "+"
+        )
+        for name, raw in (("pass", "epa_pass"), ("rush", "epa_rush"))
+        for kind in ("diff", "sum")
+        for window in ("short", "long")
+    },
+    **{
+        (
+            f"success_diff_{window}" if kind == "diff" else f"success_matchup_sum_{window}"
+        ): _matchup_formula("success_rate", window, "-" if kind == "diff" else "+")
+        for kind in ("diff", "sum")
+        for window in ("short", "long")
+    },
+    **{
+        f"{name}_diff_short": _matchup_formula(raw, "short", "-")
+        for name, raw in (("early_down", "early_down_epa"), ("neutral", "neutral_epa"))
+    },
+    **{
+        f"{name}_matchup_sum_short": _matchup_formula(raw, "short", "+")
+        for name, raw in (("early_down", "early_down_epa"), ("neutral", "neutral_epa"))
+    },
+    **{
+        f"{name}_diff": _matchup_formula(raw, "short", "-")
+        for name, raw in (
+            ("explosive_pass", "explosive_pass_rate"),
+            ("explosive_rush", "explosive_rush_rate"),
+        )
+    },
+    **{
+        f"{name}_matchup_sum": _matchup_formula(raw, "short", "+")
+        for name, raw in (
+            ("explosive_pass", "explosive_pass_rate"),
+            ("explosive_rush", "explosive_rush_rate"),
+        )
+    },
+    "rating_matchup_sum_short": _matchup_formula("epa_play", "short", "+"),
+    "rating_matchup_sum_long": _matchup_formula("epa_play", "long", "+"),
+    "rest_diff": "base.home_rest - base.away_rest",
+    "home_indicator": "constant 1.0",
+    "div_game": "base.div_game",
+    "is_dome": "base.is_dome",
+    "temp_outdoor": "base.temp_outdoor",
+    "wind_outdoor": "base.wind_outdoor",
+    **{
+        f"{output}_{kind}": _sided_formula(raw, "-" if kind == "diff" else "+")
+        for output, raw in (
+            ("qb_epa", "qb_epa_per_db"),
+            ("qb_cpoe", "qb_cpoe"),
+            ("qb_sack_rate", "qb_sack_rate"),
+            ("qb_int_rate", "qb_int_rate"),
+            ("qb_change_epa", "qb_change_epa"),
+        )
+        for kind in ("diff", "sum")
+    },
+    **{
+        f"{flag}_any": f"max(home.{flag}, away.{flag}, missing_side_indicator)"
+        for flag in ("qb_new_starter", "qb_rookie", "qb_uncertain")
+    },
+    **{
+        f"{output}_diff": _sided_formula(raw, "-")
+        for output, raw in (
+            ("neutral_pass_rate", "neutral_pass_rate"),
+            ("pace", "pace_seconds"),
+            ("turnover_rate", "turnover_rate"),
+            ("explosive_play", "explosive_play_rate"),
+            ("field_position", "starting_field_position"),
+            ("special_teams", "special_teams_epa"),
+        )
+    },
+    "neutral_pass_rate_mean": "(home.neutral_pass_rate + away.neutral_pass_rate) / 2",
+    "pace_mean": "(home.pace_seconds + away.pace_seconds) / 2",
+    **{
+        f"{output}_sum": _sided_formula(raw, "+")
+        for output, raw in (
+            ("turnover_rate", "turnover_rate"),
+            ("explosive_play", "explosive_play_rate"),
+            ("field_position", "starting_field_position"),
+            ("special_teams", "special_teams_epa"),
+        )
+    },
+    "style_imputed_any": "max(home.style_imputed, away.style_imputed, missing_side_indicator)",
+    **{
+        f"{output}_diff": _sided_formula(raw, "-")
+        for output, raw in (
+            ("off_returning_share", "off_returning_share"),
+            ("def_returning_share", "def_returning_share"),
+            ("off_snap_hhi", "off_snap_hhi"),
+            ("def_snap_hhi", "def_snap_hhi"),
+            ("depth_change", "depth_chart_change_rate"),
+            ("roster_churn", "roster_churn"),
+        )
+    },
+    **{
+        f"{output}_sum": _sided_formula(raw, "+")
+        for output, raw in (
+            ("off_snap_hhi", "off_snap_hhi"),
+            ("def_snap_hhi", "def_snap_hhi"),
+            ("depth_change", "depth_chart_change_rate"),
+            ("roster_churn", "roster_churn"),
+        )
+    },
+    "off_returning_share_min": "min(home.off_returning_share, away.off_returning_share)",
+    "def_returning_share_min": "min(home.def_returning_share, away.def_returning_share)",
+    "personnel_imputed_any": (
+        "max(home.personnel_imputed, away.personnel_imputed, missing_side_indicator)"
+    ),
     "pfr_pressure_edge_diff": (
-        "(away_pressure+home_def_pressure) - (home_pressure+away_def_pressure)"
+        "(away.pfr_pressure_rate + home.pfr_def_pressure_rate) "
+        "- (home.pfr_pressure_rate + away.pfr_def_pressure_rate)"
     ),
-    "pfr_accuracy_diff": "away_bad_throw_rate - home_bad_throw_rate",
-    "pfr_drop_diff": "(away_drop+away_rec_drop) - (home_drop+home_rec_drop)",
-    "pfr_rush_contact_diff": "home_ybc+home_yac+home_broken - away equivalents",
-    "pfr_tackle_diff": "away_def_missed_tackle_rate - home_def_missed_tackle_rate",
+    "pfr_accuracy_diff": "away.pfr_bad_throw_rate - home.pfr_bad_throw_rate",
+    "pfr_drop_diff": (
+        "(away.pfr_drop_rate + away.pfr_rec_drop_rate) "
+        "- (home.pfr_drop_rate + home.pfr_rec_drop_rate)"
+    ),
+    "pfr_rush_contact_diff": (
+        "home.pfr_rush_ybc + home.pfr_rush_yac + home.pfr_broken_tackle_rate "
+        "- away.pfr_rush_ybc - away.pfr_rush_yac - away.pfr_broken_tackle_rate"
+    ),
+    "pfr_tackle_diff": ("away.pfr_def_missed_tackle_rate - home.pfr_def_missed_tackle_rate"),
     "pfr_pressure_environment_sum": (
-        "home_pressure+away_pressure+home_def_pressure+away_def_pressure"
+        "home.pfr_pressure_rate + away.pfr_def_pressure_rate "
+        "+ away.pfr_pressure_rate + home.pfr_def_pressure_rate"
     ),
-    "pfr_accuracy_sum": "-(home_bad_throw_rate + away_bad_throw_rate)",
-    "pfr_drop_sum": "home_drop+home_rec_drop+away_drop+away_rec_drop",
-    "pfr_rush_contact_sum": "home_ybc+home_yac+home_broken + away equivalents",
-    "pfr_tackle_environment_sum": ("home_def_missed_tackle_rate + away_def_missed_tackle_rate"),
+    "pfr_accuracy_sum": "-(home.pfr_bad_throw_rate + away.pfr_bad_throw_rate)",
+    "pfr_drop_sum": (
+        "home.pfr_drop_rate + home.pfr_rec_drop_rate + away.pfr_drop_rate + away.pfr_rec_drop_rate"
+    ),
+    "pfr_rush_contact_sum": (
+        "home.pfr_rush_ybc + home.pfr_rush_yac + home.pfr_broken_tackle_rate "
+        "+ away.pfr_rush_ybc + away.pfr_rush_yac + away.pfr_broken_tackle_rate"
+    ),
+    "pfr_tackle_environment_sum": (
+        "home.pfr_def_missed_tackle_rate + away.pfr_def_missed_tackle_rate"
+    ),
+    "pfr_imputed_any": "max(home.pfr_imputed, away.pfr_imputed, missing_side_indicator)",
 }
 
 
@@ -223,19 +408,26 @@ def _fill_numeric_sides(
     *,
     source_flag: str | None = None,
 ) -> pd.Series:
+    missing_priors = sorted(set(columns).difference(RAW_NEUTRAL_PRIORS))
+    if missing_priors:
+        raise ValueError(f"missing frozen raw neutral priors: {missing_priors}")
     value_columns = [f"{side}_{column}" for side in ("home", "away") for column in columns]
     numeric = sided[value_columns].apply(pd.to_numeric, errors="coerce")
     invalid = numeric.isna().any(axis=1)
     non_finite = ~np.isfinite(numeric.fillna(0.0).to_numpy(dtype=float)).all(axis=1)
     if non_finite.any():
         raise ValueError("non-finite value in team-week feature block")
-    sided[value_columns] = numeric.fillna(float(DEFAULT_CONSTANTS["block_neutral_fill"]))
+    for side in ("home", "away"):
+        for column in columns:
+            sided[f"{side}_{column}"] = numeric[f"{side}_{column}"].fillna(
+                RAW_NEUTRAL_PRIORS[column]
+            )
     if source_flag is None:
         return invalid.astype(int)
     flag_columns = [f"home_{source_flag}", f"away_{source_flag}"]
     flags = sided[flag_columns].apply(pd.to_numeric, errors="coerce")
     invalid |= flags.isna().any(axis=1)
-    sided[flag_columns] = flags.fillna(1.0)
+    sided[flag_columns] = flags.fillna(RAW_NEUTRAL_PRIORS[source_flag])
     return pd.concat([sided[flag_columns], invalid.rename("missing")], axis=1).max(axis=1)
 
 
@@ -503,9 +695,10 @@ def _manifest(
     *, sources: Mapping[str, str] | None, constants: Mapping[str, object] | None
 ) -> FeatureManifest:
     source_versions = {**DEFAULT_SOURCES, **dict(sources or {})}
+    _validate_source_versions(source_versions)
     frozen_constants = {**DEFAULT_CONSTANTS, **dict(constants or {})}
-    if frozen_constants["block_neutral_fill"] != 0.0:
-        raise ValueError("the frozen block-neutral fill is 0.0")
+    if frozen_constants["raw_neutral_priors"] != RAW_NEUTRAL_PRIORS:
+        raise ValueError("the frozen raw neutral-prior map cannot be overridden")
     if frozen_constants["c5_production_eligible"] is not False:
         raise ValueError("C5 is production-ineligible at 69.12% receiving drop-rate coverage")
     if frozen_constants["pfr_rec_drop_rate_coverage_2025"] != 0.6912:
@@ -549,3 +742,17 @@ def build_v2_game_features(
     frame[list(manifested)] = numeric
     _validate_game_keys(frame)
     return V2FeatureBundle(frame=frame.reset_index(drop=True), manifest=manifest)
+
+
+def _validate_source_versions(sources: Mapping[str, str]) -> None:
+    for name, contract in sources.items():
+        if not isinstance(contract, str) or not contract or contract != contract.strip():
+            raise ValueError(f"{name} must use a concrete versioned source contract")
+        parts = contract.split("|")
+        if any(
+            part.count("@") != 1
+            or not all(part.split("@", 1))
+            or any(character.isspace() for character in part)
+            for part in parts
+        ):
+            raise ValueError(f"{name} must use a concrete versioned source contract")
