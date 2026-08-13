@@ -32,6 +32,19 @@ def _mutable_json_copy(value: object) -> object:
     return value
 
 
+def rating_setting_key(short_halflife: int, long_halflife: int, prior_season_weight: float) -> str:
+    """Stable manifest key for one predefined rating-recency setting."""
+    return json.dumps(
+        {
+            "long_halflife": long_halflife,
+            "prior_season_weight": prior_season_weight,
+            "short_halflife": short_halflife,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 @dataclass(frozen=True, order=True)
 class TargetConfig:
     candidate: str
@@ -42,6 +55,13 @@ class TargetConfig:
 
     def key(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+
+    def rating_key(self) -> str:
+        return rating_setting_key(
+            self.short_halflife,
+            self.long_halflife,
+            self.prior_season_weight,
+        )
 
 
 @dataclass(frozen=True)
@@ -85,6 +105,39 @@ class FeatureManifest:
             "total": self.total_by_candidate,
         }
         return tuple(mappings[target][candidate])
+
+    def rating_variant_columns(self, target: str, config: TargetConfig) -> Mapping[str, str]:
+        """Return the frozen canonical-to-physical columns for one rating setting."""
+        if config.candidate == "C0":
+            return MappingProxyType({})
+        target_key = "margin" if target == "margin" else "total"
+        if target not in {"margin", "total", "total_points"}:
+            raise ValueError(f"unsupported rating-variant target {target!r}")
+        variants = self.constants.get("rating_variant_columns")
+        if not isinstance(variants, Mapping):
+            raise TypeError("manifest has no declared rating variant column contract")
+        setting = variants.get(config.rating_key())
+        if not isinstance(setting, Mapping):
+            raise TypeError(
+                f"manifest has no declared rating variant for setting {config.rating_key()}"
+            )
+        mapping = setting.get(target_key)
+        if not isinstance(mapping, Mapping) or not mapping:
+            raise ValueError(
+                f"manifest rating variant {config.rating_key()} has no {target_key} mapping"
+            )
+        normalized: dict[str, str] = {}
+        for canonical, physical in mapping.items():
+            if not isinstance(canonical, str) or not canonical:
+                raise ValueError("manifest rating variant has an invalid canonical column")
+            if not isinstance(physical, str) or not physical:
+                raise ValueError("manifest rating variant has an invalid physical column")
+            normalized[canonical] = physical
+        if len(set(normalized.values())) != len(normalized):
+            raise ValueError(
+                "manifest rating variant maps multiple features to one physical column"
+            )
+        return MappingProxyType(normalized)
 
     def to_dict(self) -> dict[str, object]:
         return {

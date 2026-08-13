@@ -13,7 +13,13 @@ import pandas as pd
 
 from nfl_game.data.teams import normalize_team_codes
 from nfl_game.model.features import FEATURE_COLS
-from nfl_game.model.v2_config import CANDIDATES, FeatureManifest
+from nfl_game.model.v2_config import (
+    CANDIDATES,
+    PRIOR_SEASON_WEIGHTS,
+    RATING_WINDOWS,
+    FeatureManifest,
+    rating_setting_key,
+)
 
 GAME_KEYS = ("game_id", "season", "week")
 TEAM_WEEK_KEYS = ("season", "week", "team")
@@ -194,9 +200,53 @@ DEFAULT_SOURCES = {
     "C4": "nflverse-rosters-depth-snap-counts@v1|nflreadpy@0.1.5",
     "C5": "nflverse-pfr-advanced-weekly@v1|nflreadpy@0.1.5",
 }
+
+
+_MARGIN_RATING_VARIANT_FEATURES = tuple(
+    column
+    for column in MARGIN_FEATURES_BY_BLOCK["C1"]
+    if column not in {"rest_diff", "home_indicator", "div_game"}
+)
+_TOTAL_RATING_VARIANT_FEATURES = tuple(
+    column
+    for column in TOTAL_FEATURES_BY_BLOCK["C1"]
+    if column not in {"is_dome", "temp_outdoor", "wind_outdoor"}
+)
+
+
+def _rating_variant_physical_column(
+    canonical: str, short_halflife: int, long_halflife: int, prior_season_weight: float
+) -> str:
+    weight = round(prior_season_weight * 10)
+    return f"{canonical}__s{short_halflife}_l{long_halflife}_p{weight:02d}"
+
+
+def _rating_variant_contract() -> Mapping[str, object]:
+    variants = {}
+    for short_halflife, long_halflife in RATING_WINDOWS:
+        for prior_season_weight in PRIOR_SEASON_WEIGHTS:
+            key = rating_setting_key(short_halflife, long_halflife, prior_season_weight)
+            targets = {}
+            for target, columns in (
+                ("margin", _MARGIN_RATING_VARIANT_FEATURES),
+                ("total", _TOTAL_RATING_VARIANT_FEATURES),
+            ):
+                targets[target] = MappingProxyType(
+                    {
+                        column: _rating_variant_physical_column(
+                            column, short_halflife, long_halflife, prior_season_weight
+                        )
+                        for column in columns
+                    }
+                )
+            variants[key] = MappingProxyType(targets)
+    return MappingProxyType(variants)
+
+
 DEFAULT_CONSTANTS: Mapping[str, object] = MappingProxyType(
     {
         "raw_neutral_priors": RAW_NEUTRAL_PRIORS,
+        "rating_variant_columns": _rating_variant_contract(),
         "c5_production_eligible": False,
         "pfr_rec_drop_rate_coverage_2025": 0.6912,
     }
