@@ -543,6 +543,23 @@ def test_variant_mapping_rejects_a_physical_name_from_the_wrong_setting():
         nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
 
 
+@pytest.mark.parametrize("canonical_target", ("margin", "total"))
+def test_variant_physical_column_cannot_alias_a_canonical_in_either_target_on_empty_input(
+    canonical_target,
+):
+    payload = _contract_manifest().to_dict()
+    colliding = _physical_column("rating_a", 4, 16, 0.4)
+    candidate_key = "margin_by_candidate" if canonical_target == "margin" else "total_by_candidate"
+    payload[candidate_key]["C2"] = [
+        *payload[candidate_key]["C1"],
+        colliding,
+    ]
+    manifest = FeatureManifest.from_dict(payload)
+
+    with pytest.raises(ValueError, match="physical.*canonical|canonical.*alias"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
 @pytest.mark.parametrize(
     "leak",
     (

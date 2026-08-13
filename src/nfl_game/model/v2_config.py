@@ -201,6 +201,12 @@ class FeatureManifest:
         if unknown:
             raise ValueError(f"manifest contains unsupported candidate(s) {unknown}")
 
+        canonical_schema = {
+            column
+            for mapping in mappings.values()
+            for columns in mapping.values()
+            for column in columns
+        }
         for target, mapping in mappings.items():
             for candidate, columns in mapping.items():
                 duplicates = [
@@ -253,7 +259,15 @@ class FeatureManifest:
                 for prior in PRIOR_SEASON_WEIGHTS:
                     for target in mappings:
                         config = TargetConfig("C1", 1.0, short, long, prior)
-                        self.rating_variant_columns(target, config)
+                        resolved = self.rating_variant_columns(target, config)
+                        canonical_aliases = sorted(
+                            set(resolved.values()).intersection(canonical_schema)
+                        )
+                        if canonical_aliases:
+                            raise ValueError(
+                                "rating variant physical column(s) alias canonical model schema: "
+                                f"{canonical_aliases}"
+                            )
 
     def to_dict(self) -> dict[str, object]:
         return {
