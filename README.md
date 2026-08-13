@@ -7,6 +7,10 @@ The model is **market-blind**: it never sees the betting line when predicting. A
 layer compares model output to the market and reports calibrated cover probabilities.
 
 Data source: [`nflreadpy`](https://nflreadpy.nflverse.com/). No API key required.
+The optional advanced-stat candidate uses public
+[`nflverse` PFR releases](https://github.com/nflverse/nflverse-data/releases/tag/pfr_advstats)
+derived from [Pro Football Reference](https://www.pro-football-reference.com/) data; credit
+for those fields belongs to nflverse and Pro Football Reference.
 
 Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 
