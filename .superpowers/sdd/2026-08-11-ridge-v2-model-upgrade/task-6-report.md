@@ -79,3 +79,40 @@ no-history imputation.
 - The review fixes remain contained to `style.py`, `test_style.py`, and this required
   report. Strict target/future exclusion remains the first history filter, before
   per-team ranking and truncation.
+
+## Review fix round 2
+
+### RED / GREEN evidence
+
+- RED: `python -m pytest tests/test_style.py -v --basetemp
+  .pytest-tmp-task6-round2-red` produced **2 failed, 9 passed** before the production
+  edit. The partial-ID regression got `pace_seconds=NaN` instead of `27.0`; the tied-clock
+  reversal changed starting field position from `32.5` to `35.0`.
+- GREEN targeted: `python -m pytest tests/test_style.py -k "partial_play_ids or
+  tied_fallback_clocks" -v --basetemp .venv\pytest-tmp-task6-round2-targeted` produced
+  **2 passed, 9 deselected**.
+- GREEN focused: `python -m pytest tests/test_style.py -v --basetemp
+  .venv\pytest-tmp-task6-round2-focused` produced **11 passed**.
+
+### Decision and self-review
+
+- Complete, unique numeric `play_id` values remain the preferred order.
+- Partial, missing, or duplicate IDs now fall back to quarter/game-clock chronology,
+  then use per-row numeric IDs and a canonical row-content key to break ties without
+  consulting input position. Missing quarter/clock/ID values sort deterministically
+  after present values.
+- Canonically identical tied rows may retain stable input order, but they are identical
+  for pace and starting-field-position inputs, so exchanging them cannot change either
+  result.
+- The change does not touch trailing-eight ordinal history, strict as-of filtering, or
+  turnover-OR behavior.
+
+### Validation
+
+- `python -m pytest -q --basetemp .venv\pytest-tmp-task6-round2-full-final`:
+  **508 passed**, with three pre-existing dependency/runtime warnings.
+- `python -m ruff check .`: passed.
+- `git diff --check`: passed.
+
+### Concerns
+- None. Reviewer-created untracked pytest directories were left untouched.
