@@ -1,5 +1,7 @@
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 from typing import Literal, TypeAlias
 
 CandidateId: TypeAlias = Literal["C0", "C1", "C2", "C3", "C4", "C5"]
@@ -10,6 +12,24 @@ RATING_WINDOWS = ((4, 16), (8, 24), (12, 32))
 PRIOR_SEASON_WEIGHTS = (0.4, 0.6, 0.8)
 MARKET_COLUMNS = frozenset({"spread_line", "total_line", "away_moneyline", "home_moneyline"})
 MARKET_PROBABILITY_COLUMNS = frozenset({"cover_prob", "over_prob"})
+
+
+def _deep_freeze(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_deep_freeze(item) for item in value)
+    return value
+
+
+def _mutable_json_copy(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _mutable_json_copy(item) for key, item in value.items()}
+    if isinstance(value, (tuple, set, frozenset)):
+        return [_mutable_json_copy(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True, order=True)
@@ -33,12 +53,17 @@ class V2ModelConfig:
 @dataclass(frozen=True)
 class FeatureManifest:
     version: str
-    margin_by_candidate: dict[str, tuple[str, ...]]
-    total_by_candidate: dict[str, tuple[str, ...]]
-    sources: dict[str, str]
-    constants: dict[str, object]
+    margin_by_candidate: Mapping[str, tuple[str, ...]]
+    total_by_candidate: Mapping[str, tuple[str, ...]]
+    sources: Mapping[str, str]
+    constants: Mapping[str, object]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "margin_by_candidate", _deep_freeze(self.margin_by_candidate))
+        object.__setattr__(self, "total_by_candidate", _deep_freeze(self.total_by_candidate))
+        object.__setattr__(self, "sources", _deep_freeze(self.sources))
+        object.__setattr__(self, "constants", _deep_freeze(self.constants))
+
         for target, mapping in (
             ("margin", self.margin_by_candidate),
             ("total", self.total_by_candidate),
@@ -46,9 +71,7 @@ class FeatureManifest:
             for candidate, columns in mapping.items():
                 overlap = MARKET_COLUMNS.intersection(columns)
                 if overlap:
-                    raise ValueError(
-                        f"market column in {target}/{candidate}: {sorted(overlap)}"
-                    )
+                    raise ValueError(f"market column in {target}/{candidate}: {sorted(overlap)}")
                 probability_overlap = MARKET_PROBABILITY_COLUMNS.intersection(columns)
                 if probability_overlap:
                     raise ValueError(
@@ -72,8 +95,8 @@ class FeatureManifest:
             "total_by_candidate": {
                 key: list(value) for key, value in self.total_by_candidate.items()
             },
-            "sources": dict(self.sources),
-            "constants": dict(self.constants),
+            "sources": _mutable_json_copy(self.sources),
+            "constants": _mutable_json_copy(self.constants),
         }
 
     @classmethod

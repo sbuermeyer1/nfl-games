@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -27,46 +28,48 @@ _RATING_TARGETS = (
     "explosive_pass_rate",
     "explosive_rush_rate",
 )
-RAW_NEUTRAL_PRIORS = {
-    **{
-        f"{window}_{unit}_{target}": 0.0
-        for window in ("short", "long")
-        for unit in ("off", "def")
-        for target in _RATING_TARGETS
-    },
-    "qb_epa_per_db": 0.0,
-    "qb_cpoe": 0.0,
-    "qb_sack_rate": 0.065,
-    "qb_int_rate": 0.025,
-    "qb_change_epa": 0.0,
-    "qb_new_starter": 0.0,
-    "qb_rookie": 0.0,
-    "qb_uncertain": 1.0,
-    "neutral_pass_rate": 0.55,
-    "pace_seconds": 28.0,
-    "turnover_rate": 0.025,
-    "explosive_play_rate": 0.10,
-    "starting_field_position": 25.0,
-    "special_teams_epa": 0.0,
-    "style_imputed": 1.0,
-    "off_returning_share": 0.70,
-    "def_returning_share": 0.70,
-    "off_snap_hhi": 0.10,
-    "def_snap_hhi": 0.10,
-    "depth_chart_change_rate": 0.10,
-    "roster_churn": 0.30,
-    "personnel_imputed": 1.0,
-    "pfr_pressure_rate": 0.25,
-    "pfr_bad_throw_rate": 0.15,
-    "pfr_drop_rate": 0.05,
-    "pfr_rec_drop_rate": 0.05,
-    "pfr_rush_ybc": 2.5,
-    "pfr_rush_yac": 2.5,
-    "pfr_broken_tackle_rate": 0.10,
-    "pfr_def_missed_tackle_rate": 0.10,
-    "pfr_def_pressure_rate": 0.25,
-    "pfr_imputed": 1.0,
-}
+RAW_NEUTRAL_PRIORS = MappingProxyType(
+    {
+        **{
+            f"{window}_{unit}_{target}": 0.0
+            for window in ("short", "long")
+            for unit in ("off", "def")
+            for target in _RATING_TARGETS
+        },
+        "qb_epa_per_db": 0.0,
+        "qb_cpoe": 0.0,
+        "qb_sack_rate": 0.065,
+        "qb_int_rate": 0.025,
+        "qb_change_epa": 0.0,
+        "qb_new_starter": 0.0,
+        "qb_rookie": 0.0,
+        "qb_uncertain": 1.0,
+        "neutral_pass_rate": 0.55,
+        "pace_seconds": 28.0,
+        "turnover_rate": 0.025,
+        "explosive_play_rate": 0.10,
+        "starting_field_position": 25.0,
+        "special_teams_epa": 0.0,
+        "style_imputed": 1.0,
+        "off_returning_share": 0.70,
+        "def_returning_share": 0.70,
+        "off_snap_hhi": 0.10,
+        "def_snap_hhi": 0.10,
+        "depth_chart_change_rate": 0.10,
+        "roster_churn": 0.30,
+        "personnel_imputed": 1.0,
+        "pfr_pressure_rate": 0.25,
+        "pfr_bad_throw_rate": 0.15,
+        "pfr_drop_rate": 0.05,
+        "pfr_rec_drop_rate": 0.05,
+        "pfr_rush_ybc": 2.5,
+        "pfr_rush_yac": 2.5,
+        "pfr_broken_tackle_rate": 0.10,
+        "pfr_def_missed_tackle_rate": 0.10,
+        "pfr_def_pressure_rate": 0.25,
+        "pfr_imputed": 1.0,
+    }
+)
 
 
 MARGIN_FEATURES_BY_BLOCK = {
@@ -191,11 +194,13 @@ DEFAULT_SOURCES = {
     "C4": "nflverse-rosters-depth-snap-counts@v1|nflreadpy@0.1.5",
     "C5": "nflverse-pfr-advanced-weekly@v1|nflreadpy@0.1.5",
 }
-DEFAULT_CONSTANTS: dict[str, object] = {
-    "raw_neutral_priors": RAW_NEUTRAL_PRIORS,
-    "c5_production_eligible": False,
-    "pfr_rec_drop_rate_coverage_2025": 0.6912,
-}
+DEFAULT_CONSTANTS: Mapping[str, object] = MappingProxyType(
+    {
+        "raw_neutral_priors": RAW_NEUTRAL_PRIORS,
+        "c5_production_eligible": False,
+        "pfr_rec_drop_rate_coverage_2025": 0.6912,
+    }
+)
 
 
 def _matchup_formula(raw: str, window: str, operation: str) -> str:
@@ -272,10 +277,9 @@ FEATURE_FORMULAS = {
         )
         for kind in ("diff", "sum")
     },
-    **{
-        f"{flag}_any": f"max(home.{flag}, away.{flag}, missing_side_indicator)"
-        for flag in ("qb_new_starter", "qb_rookie", "qb_uncertain")
-    },
+    "qb_new_starter_any": "max(home.qb_new_starter, away.qb_new_starter)",
+    "qb_rookie_any": "max(home.qb_rookie, away.qb_rookie)",
+    "qb_uncertain_any": ("max(home.qb_uncertain, away.qb_uncertain, any_missing_qb_input)"),
     **{
         f"{output}_diff": _sided_formula(raw, "-")
         for output, raw in (
@@ -691,25 +695,38 @@ def _cumulative_columns(blocks: Mapping[str, tuple[str, ...]]) -> dict[str, tupl
     return result
 
 
+def _json_compatible(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (tuple, set, frozenset)):
+        return [_json_compatible(item) for item in value]
+    return value
+
+
+def _manifest_version(
+    formulas: Mapping[str, str],
+    sources: Mapping[str, str],
+    constants: Mapping[str, object],
+) -> str:
+    payload = {"formulas": formulas, "sources": sources, "constants": constants}
+    encoded = json.dumps(_json_compatible(payload), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _manifest(
     *, sources: Mapping[str, str] | None, constants: Mapping[str, object] | None
 ) -> FeatureManifest:
     source_versions = {**DEFAULT_SOURCES, **dict(sources or {})}
     _validate_source_versions(source_versions)
-    frozen_constants = {**DEFAULT_CONSTANTS, **dict(constants or {})}
-    if frozen_constants["raw_neutral_priors"] != RAW_NEUTRAL_PRIORS:
+    supplied_constants = dict(constants or {})
+    if "raw_neutral_priors" in supplied_constants:
         raise ValueError("the frozen raw neutral-prior map cannot be overridden")
+    frozen_constants = {**DEFAULT_CONSTANTS, **supplied_constants}
     if frozen_constants["c5_production_eligible"] is not False:
         raise ValueError("C5 is production-ineligible at 69.12% receiving drop-rate coverage")
     if frozen_constants["pfr_rec_drop_rate_coverage_2025"] != 0.6912:
         raise ValueError("the frozen 2025 PFR receiving drop-rate coverage is 0.6912")
-    payload = {
-        "formulas": FEATURE_FORMULAS,
-        "sources": source_versions,
-        "constants": frozen_constants,
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    version = hashlib.sha256(encoded).hexdigest()
+    version = _manifest_version(FEATURE_FORMULAS, source_versions, frozen_constants)
     return FeatureManifest(
         version=version,
         margin_by_candidate=_cumulative_columns(MARGIN_FEATURES_BY_BLOCK),

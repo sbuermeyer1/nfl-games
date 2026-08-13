@@ -103,6 +103,35 @@ def test_manifest_round_trips_through_json_compatible_dictionary():
     assert restored.columns("margin", "C1") == ("rating_diff", "rest_diff")
 
 
+def test_manifest_is_deeply_immutable_while_to_dict_returns_a_mutable_copy():
+    manifest = FeatureManifest(
+        version="ridge-v2-test",
+        margin_by_candidate={"C1": ("rating_diff",)},
+        total_by_candidate={"C1": ("pace_sum",)},
+        sources={"weather": "nflverse-weather@v1"},
+        constants={"priors": {"pace_seconds": 28.0, "windows": [4, 16]}},
+    )
+
+    with pytest.raises(TypeError):
+        manifest.margin_by_candidate["C1"] = ("changed",)
+    with pytest.raises(TypeError):
+        manifest.sources["weather"] = "changed@v2"
+    with pytest.raises(TypeError):
+        manifest.constants["priors"]["pace_seconds"] = 1.0
+
+    payload = manifest.to_dict()
+    payload["constants"]["priors"]["pace_seconds"] = 30.0
+    payload["constants"]["priors"]["windows"].append(32)
+    assert manifest.constants["priors"]["pace_seconds"] == 28.0
+    assert manifest.constants["priors"]["windows"] == (4, 16)
+    json.dumps(payload)
+
+    restored = FeatureManifest.from_dict(json.loads(json.dumps(manifest.to_dict())))
+    assert restored == manifest
+    with pytest.raises(TypeError):
+        restored.constants["priors"]["pace_seconds"] = 1.0
+
+
 def test_v2_artifact_paths_use_approved_filenames():
     assert V2_FEATURES_PATH.name == "game_features_ridge_v2.parquet"
     assert V2_MANIFEST_PATH.name == "ridge_v2_manifest.json"

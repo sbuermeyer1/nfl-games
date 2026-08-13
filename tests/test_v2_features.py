@@ -436,6 +436,29 @@ def test_frozen_raw_neutral_prior_map_cannot_be_overridden():
         _build(constants={"raw_neutral_priors": {"pace_seconds": 1.0}})
 
 
+def test_manifest_prior_payload_cannot_mutate_future_builds_or_imputation():
+    module = _v2_features()
+    blocks = _blocks()
+    blocks["C3"].loc[blocks["C3"]["team"] == "BUF", "pace_seconds"] = np.nan
+    bundle = module.build_v2_game_features(_base_features(), blocks)
+    before_payload = bundle.manifest.to_dict()
+    before_pace = bundle.frame.set_index("game_id").loc["g1", "pace_diff"]
+    with pytest.raises(TypeError):
+        bundle.manifest.constants["raw_neutral_priors"]["pace_seconds"] = 1.0
+
+    with pytest.raises(TypeError):
+        module.RAW_NEUTRAL_PRIORS["pace_seconds"] = 1.0
+
+    assert bundle.manifest.to_dict() == before_payload
+    with pytest.raises(TypeError):
+        module.DEFAULT_CONSTANTS["raw_neutral_priors"] = {}
+
+    rebuilt = module.build_v2_game_features(_base_features(), blocks)
+    assert rebuilt.manifest.version == bundle.manifest.version
+    assert rebuilt.frame.set_index("game_id").loc["g1", "pace_diff"] == pytest.approx(before_pace)
+    assert rebuilt.frame.set_index("game_id").loc["g1", "style_imputed_any"] == pytest.approx(1.0)
+
+
 def test_c5_production_ineligibility_has_no_manifest_bypass():
     with pytest.raises(ValueError, match="production-ineligible"):
         _build(constants={"c5_production_eligible": True})
@@ -453,6 +476,55 @@ def test_every_non_c0_output_has_an_exact_hashed_formula_entry():
         "home.pfr_pressure_rate + away.pfr_def_pressure_rate "
         "+ away.pfr_pressure_rate + home.pfr_def_pressure_rate"
     )
+
+    expected_distinct_formulas = {
+        "qb_new_starter_any": "max(home.qb_new_starter, away.qb_new_starter)",
+        "qb_rookie_any": "max(home.qb_rookie, away.qb_rookie)",
+        "qb_uncertain_any": ("max(home.qb_uncertain, away.qb_uncertain, any_missing_qb_input)"),
+        "pfr_pressure_edge_diff": (
+            "(away.pfr_pressure_rate + home.pfr_def_pressure_rate) "
+            "- (home.pfr_pressure_rate + away.pfr_def_pressure_rate)"
+        ),
+        "pfr_accuracy_diff": "away.pfr_bad_throw_rate - home.pfr_bad_throw_rate",
+        "pfr_drop_diff": (
+            "(away.pfr_drop_rate + away.pfr_rec_drop_rate) "
+            "- (home.pfr_drop_rate + home.pfr_rec_drop_rate)"
+        ),
+        "pfr_rush_contact_diff": (
+            "home.pfr_rush_ybc + home.pfr_rush_yac + home.pfr_broken_tackle_rate "
+            "- away.pfr_rush_ybc - away.pfr_rush_yac - away.pfr_broken_tackle_rate"
+        ),
+        "pfr_tackle_diff": ("away.pfr_def_missed_tackle_rate - home.pfr_def_missed_tackle_rate"),
+        "pfr_pressure_environment_sum": (
+            "home.pfr_pressure_rate + away.pfr_def_pressure_rate "
+            "+ away.pfr_pressure_rate + home.pfr_def_pressure_rate"
+        ),
+        "pfr_accuracy_sum": "-(home.pfr_bad_throw_rate + away.pfr_bad_throw_rate)",
+        "pfr_drop_sum": (
+            "home.pfr_drop_rate + home.pfr_rec_drop_rate "
+            "+ away.pfr_drop_rate + away.pfr_rec_drop_rate"
+        ),
+        "pfr_rush_contact_sum": (
+            "home.pfr_rush_ybc + home.pfr_rush_yac + home.pfr_broken_tackle_rate "
+            "+ away.pfr_rush_ybc + away.pfr_rush_yac + away.pfr_broken_tackle_rate"
+        ),
+        "pfr_tackle_environment_sum": (
+            "home.pfr_def_missed_tackle_rate + away.pfr_def_missed_tackle_rate"
+        ),
+        "pfr_imputed_any": ("max(home.pfr_imputed, away.pfr_imputed, missing_side_indicator)"),
+    }
+    assert {
+        feature: module.FEATURE_FORMULAS[feature] for feature in expected_distinct_formulas
+    } == expected_distinct_formulas
+
+
+def test_manifest_hash_changes_when_a_frozen_prior_changes():
+    module = _v2_features()
+    constants = {**module.DEFAULT_CONSTANTS, "raw_neutral_priors": dict(module.RAW_NEUTRAL_PRIORS)}
+    before = module._manifest_version(module.FEATURE_FORMULAS, module.DEFAULT_SOURCES, constants)
+    constants["raw_neutral_priors"]["pace_seconds"] = 29.0
+    after = module._manifest_version(module.FEATURE_FORMULAS, module.DEFAULT_SOURCES, constants)
+    assert after != before
 
 
 def test_default_and_override_sources_are_concrete_versioned_contracts():
