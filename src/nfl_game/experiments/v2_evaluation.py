@@ -126,6 +126,10 @@ def walk_forward_probabilities(
         "calibration predictions",
     )
     seasons = predictions["season"].astype(int)
+    present_seasons = {int(value) for value in seasons.unique()}
+    missing_calibration = sorted(set(CALIBRATION_SEASONS).difference(present_seasons))
+    if missing_calibration:
+        raise ValueError(f"missing calibration season(s) {missing_calibration}")
     if not set(REPORT_SEASONS).issubset(set(seasons)):
         missing = sorted(set(REPORT_SEASONS).difference(seasons))
         raise ValueError(f"calibration predictions are missing report season(s) {missing}")
@@ -142,6 +146,14 @@ def walk_forward_probabilities(
             ("over", "total_points", "total_line", "model_total", "over_prob"),
         ):
             non_push = train.loc[train[actual_col] != train[line_col]]
+            required_prior = set(range(CALIBRATION_SEASONS[0], prediction_season))
+            observed_prior = {int(value) for value in non_push["season"].unique()}
+            missing_prior = sorted(required_prior.difference(observed_prior))
+            if missing_prior:
+                raise ValueError(
+                    f"{name} calibration is missing non-push evidence for prior season(s) "
+                    f"{missing_prior}"
+                )
             edge = (non_push[model_col] - non_push[line_col]).to_numpy(dtype=float)
             outcome = (non_push[actual_col] > non_push[line_col]).astype(int).to_numpy()
             if fit_observer is not None:
@@ -200,11 +212,8 @@ def joint_market_regression(
         sample = pd.concat([grouped[index] for index in chosen], ignore_index=True)
         try:
             bootstrap[draw] = _regression_coefficients(sample, actual_col, market_col, model_col)[2]
-        except ValueError:
-            bootstrap[draw] = np.nan
-    valid = bootstrap[np.isfinite(bootstrap)]
-    if len(valid) == 0:
-        raise ValueError("all joint market bootstrap regressions were degenerate")
+        except ValueError as exc:
+            raise ValueError(f"joint market bootstrap draw {draw} is degenerate") from exc
     predictions = (
         coefficients[0]
         + coefficients[1] * frame[market_col].to_numpy(dtype=float)
@@ -217,8 +226,8 @@ def joint_market_regression(
         "intercept": float(coefficients[0]),
         "market_coef": float(coefficients[1]),
         "model_coef": float(coefficients[2]),
-        "model_coef_lower90": float(np.quantile(valid, 0.10)),
-        "model_coef_upper90": float(np.quantile(valid, 0.90)),
+        "model_coef_lower90": float(np.quantile(bootstrap, 0.10)),
+        "model_coef_upper90": float(np.quantile(bootstrap, 0.90)),
         "r2": float(1.0 - residual_sum / total_sum) if total_sum > 0 else 1.0,
         "n": len(frame),
     }
@@ -274,6 +283,15 @@ def _probability_pair(
         or not probabilities["over_prob"].between(0, 1).all()
     ):
         raise ValueError(f"{prefix} probabilities must be within [0, 1]")
+    expected_ids = set(pairs["game_id"])
+    probability_ids = set(probabilities["game_id"])
+    if probability_ids != expected_ids:
+        missing = sorted(expected_ids.difference(probability_ids))
+        extra = sorted(probability_ids.difference(expected_ids))
+        raise ValueError(
+            f"{prefix} probabilities require exact game_id coverage; "
+            f"missing={missing}, extra={extra}"
+        )
     joined = pairs.loc[:, ["game_id"]].merge(
         probabilities, on="game_id", how="left", validate="one_to_one"
     )
@@ -334,6 +352,18 @@ def evaluate_v2(
         _validate_ids(frame, label)
     v1 = v1_predictions.loc[v1_predictions["season"].isin(REPORT_SEASONS)].copy()
     v2 = v2_predictions.loc[v2_predictions["season"].isin(REPORT_SEASONS)].copy()
+    report_numeric = tuple(column for column in _PREDICTION_COLS if column != "game_id")
+    _as_finite_numeric(v1, report_numeric, "v1 report predictions")
+    _as_finite_numeric(v2, report_numeric, "v2 report predictions")
+    v1_ids = set(v1["game_id"])
+    v2_ids = set(v2["game_id"])
+    if v1_ids != v2_ids:
+        missing = sorted(v1_ids.difference(v2_ids))
+        extra = sorted(v2_ids.difference(v1_ids))
+        raise ValueError(
+            "Ridge-v1/v2 report predictions require exact game_id coverage; "
+            f"missing_from_v2={missing}, extra_in_v2={extra}"
+        )
     pairs = v1.merge(v2, on="game_id", suffixes=("_v1", "_v2"), validate="one_to_one")
     if pairs.empty:
         raise ValueError("no valid paired Ridge-v1/v2 report rows")
@@ -554,6 +584,40 @@ def research_gate_decision(report: Mapping[str, object]) -> PromotionDecision:
     """Evaluate gates 1-10, collecting every failure and missing evidence."""
     failures: list[str] = []
     pending: list[str] = []
+    derived_improvements: tuple[int, int] | None = None
+    if "report_seasons" not in report or "per_season" not in report:
+        pending.append("outer season evidence")
+    elif report.get("report_seasons") != list(REPORT_SEASONS):
+        failures.append("outer season evidence")
+    else:
+        per_season = report.get("per_season")
+        expected_keys = {str(season) for season in REPORT_SEASONS}
+        if not isinstance(per_season, Mapping) or set(per_season) != expected_keys:
+            failures.append("outer season evidence")
+        else:
+            margin_improved = 0
+            total_improved = 0
+            valid_seasons = True
+            for season in REPORT_SEASONS:
+                evidence = per_season[str(season)]
+                if not isinstance(evidence, Mapping):
+                    valid_seasons = False
+                    break
+                n_games = evidence.get("n_games")
+                margin_value = _finite_number(evidence, "margin_improvement")
+                total_value = _finite_number(evidence, "total_improvement")
+                if type(n_games) is not int or n_games <= 0:
+                    valid_seasons = False
+                    break
+                if margin_value is None or total_value is None:
+                    valid_seasons = False
+                    break
+                margin_improved += int(margin_value > 0)
+                total_improved += int(total_value > 0)
+            if valid_seasons:
+                derived_improvements = (margin_improved, total_improved)
+            else:
+                failures.append("outer season evidence")
 
     def numeric_gate(key: str, label: str, passes: Callable[[float], bool]) -> None:
         raw = report.get(key)
@@ -567,6 +631,17 @@ def research_gate_decision(report: Mapping[str, object]) -> PromotionDecision:
     numeric_gate("total_mae", "total MAE", lambda value: value < 10.684)
     numeric_gate("margin_seasons_improved", "margin season improvement", lambda value: value >= 3)
     numeric_gate("total_seasons_improved", "total season improvement", lambda value: value >= 3)
+    if "margin_seasons_improved" in report and type(report["margin_seasons_improved"]) is not int:
+        failures.append("margin season improvement")
+    if "total_seasons_improved" in report and type(report["total_seasons_improved"]) is not int:
+        failures.append("total season improvement")
+    if derived_improvements is not None:
+        margin_count = _finite_number(report, "margin_seasons_improved")
+        total_count = _finite_number(report, "total_seasons_improved")
+        if margin_count is not None and margin_count != derived_improvements[0]:
+            failures.append("margin season improvement")
+        if total_count is not None and total_count != derived_improvements[1]:
+            failures.append("total season improvement")
     numeric_gate(
         "margin_paired_improvement_lower90",
         "margin paired improvement",
@@ -591,18 +666,23 @@ def research_gate_decision(report: Mapping[str, object]) -> PromotionDecision:
     )
     numeric_gate("ats_hit_rate", "ATS hit rate", lambda value: value >= ATS_FLOOR)
     numeric_gate("ou_hit_rate", "O/U hit rate", lambda value: value >= OU_FLOOR)
-    cover = _finite_number(report, "cover_brier")
-    v1_cover = _finite_number(report, "v1_cover_brier")
-    if cover is None or v1_cover is None:
-        pending.append("cover Brier")
-    elif cover > v1_cover:
-        failures.append("cover Brier")
-    over = _finite_number(report, "over_brier")
-    v1_over = _finite_number(report, "v1_over_brier")
-    if over is None or v1_over is None:
-        pending.append("over Brier")
-    elif over > v1_over:
-        failures.append("over Brier")
+    for candidate_key, baseline_key, label in (
+        ("cover_brier", "v1_cover_brier", "cover Brier"),
+        ("over_brier", "v1_over_brier", "over Brier"),
+    ):
+        candidate = _finite_number(report, candidate_key)
+        baseline = _finite_number(report, baseline_key)
+        candidate_missing = candidate_key not in report or report.get(candidate_key) is None
+        baseline_missing = baseline_key not in report or report.get(baseline_key) is None
+        malformed = (not candidate_missing and candidate is None) or (
+            not baseline_missing and baseline is None
+        )
+        if malformed:
+            failures.append(label)
+        if candidate_missing or baseline_missing:
+            pending.append(label)
+        elif not malformed and candidate > baseline:
+            failures.append(label)
     for key, label in (
         ("correctness_passed", "correctness"),
         ("availability_passed", "availability"),

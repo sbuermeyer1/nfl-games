@@ -92,10 +92,19 @@ def _probabilities(predictions: pd.DataFrame, *, v2: bool) -> pd.DataFrame:
 
 def _passing_report() -> dict[str, object]:
     return {
+        "report_seasons": [2021, 2022, 2023, 2024, 2025],
+        "per_season": {
+            str(season): {
+                "n_games": 1,
+                "margin_improvement": 0.1,
+                "total_improvement": 0.1,
+            }
+            for season in range(2021, 2026)
+        },
         "margin_mae": 10.0,
         "total_mae": 10.0,
-        "margin_seasons_improved": 3,
-        "total_seasons_improved": 3,
+        "margin_seasons_improved": 5,
+        "total_seasons_improved": 5,
         "margin_paired_improvement_lower90": 0.01,
         "total_paired_improvement_lower90": 0.01,
         "margin_market_model_coef": 0.1,
@@ -330,7 +339,7 @@ def test_evaluate_v2_rejects_duplicate_ids_missing_probabilities_and_no_pairs():
             bootstrap_draws=5,
         )
 
-    with pytest.raises(ValueError, match="paired"):
+    with pytest.raises(ValueError, match="exact.*game_id"):
         evaluate_v2(
             v1.iloc[:0],
             v2,
@@ -448,3 +457,358 @@ def test_full_promotion_requires_successful_shadow_rebuild(shadow, approved, fai
     assert decision.approved is approved
     assert decision.failures == failure
     assert decision.pending == pending
+
+
+@pytest.mark.parametrize("missing_season", (2019, 2020))
+def test_walk_forward_calibration_requires_every_locked_seed_season(missing_season):
+    predictions = _calibration_predictions().query("season != @missing_season")
+
+    with pytest.raises(ValueError, match=rf"missing calibration season.*{missing_season}"):
+        walk_forward_probabilities(predictions)
+
+
+@pytest.mark.parametrize(
+    "actual_col, line_col, target",
+    (
+        ("margin", "spread_line", "cover"),
+        ("total_points", "total_line", "over"),
+    ),
+)
+def test_walk_forward_calibration_requires_nonpush_evidence_in_each_prior_season(
+    actual_col, line_col, target
+):
+    predictions = _calibration_predictions()
+    seed = predictions["season"].eq(2019)
+    predictions.loc[seed, actual_col] = predictions.loc[seed, line_col]
+
+    with pytest.raises(ValueError, match=rf"{target}.*season.*2019"):
+        walk_forward_probabilities(predictions)
+
+
+def test_evaluate_v2_rejects_selective_prediction_omissions_instead_of_inner_joining():
+    v1, v2 = _prediction_pair()
+    omitted = v2.loc[v2["game_id"] != "2021-0"]
+
+    with pytest.raises(ValueError, match="exact.*game_id|game_id.*coverage"):
+        evaluate_v2(
+            v1,
+            omitted,
+            _probabilities(v1, v2=False),
+            _probabilities(v2, v2=True),
+            bootstrap_draws=5,
+        )
+
+
+def test_evaluate_v2_validates_unmatched_prediction_rows_before_id_coverage():
+    v1, v2 = _prediction_pair()
+    invalid = v2.loc[v2["season"].eq(2021)].iloc[[0]].copy()
+    invalid["game_id"] = "extra-invalid"
+    invalid["model_margin"] = np.nan
+    v2 = pd.concat([v2, invalid], ignore_index=True)
+
+    with pytest.raises(ValueError, match="model_margin.*finite"):
+        evaluate_v2(
+            v1,
+            v2,
+            _probabilities(v1, v2=False),
+            _probabilities(v2, v2=True),
+            bootstrap_draws=5,
+        )
+
+
+@pytest.mark.parametrize("mutation", ("missing", "extra"))
+def test_evaluate_v2_requires_exact_probability_id_coverage(mutation):
+    v1, v2 = _prediction_pair()
+    probabilities = _probabilities(v2, v2=True)
+    if mutation == "missing":
+        probabilities = probabilities.iloc[1:]
+    else:
+        probabilities = pd.concat(
+            [
+                probabilities,
+                pd.DataFrame({"game_id": ["extra"], "cover_prob": [0.5], "over_prob": [0.5]}),
+            ],
+            ignore_index=True,
+        )
+
+    with pytest.raises(ValueError, match="probabilit.*exact.*game_id|exact.*game_id.*probabilit"):
+        evaluate_v2(
+            v1,
+            v2,
+            _probabilities(v1, v2=False),
+            probabilities,
+            bootstrap_draws=5,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    (
+        ("missing_report_seasons", "outer season evidence"),
+        ("wrong_report_seasons", "outer season evidence"),
+        ("missing_per_season", "outer season evidence"),
+        ("zero_games", "outer season evidence"),
+        ("nan_improvement", "outer season evidence"),
+        ("count_mismatch", "margin season improvement"),
+    ),
+)
+def test_research_gate_requires_exact_five_season_evidence(mutation, expected):
+    report = _passing_report()
+    if mutation == "missing_report_seasons":
+        del report["report_seasons"]
+    elif mutation == "wrong_report_seasons":
+        report["report_seasons"] = [2021, 2022, 2023, 2024]
+    elif mutation == "missing_per_season":
+        del report["per_season"]["2025"]
+    elif mutation == "zero_games":
+        report["per_season"]["2025"]["n_games"] = 0
+    elif mutation == "nan_improvement":
+        report["per_season"]["2025"]["total_improvement"] = np.nan
+    else:
+        report["margin_seasons_improved"] = 4
+
+    decision = research_gate_decision(report)
+
+    assert not decision.approved
+    assert expected in decision.failures or expected in decision.pending
+
+
+@pytest.mark.parametrize("key", ("cover_brier", "v1_cover_brier", "over_brier", "v1_over_brier"))
+@pytest.mark.parametrize("malformed", (float("nan"), float("inf"), "bad"))
+def test_research_gate_rejects_present_malformed_brier_evidence(key, malformed):
+    report = _passing_report()
+    report[key] = malformed
+
+    decision = research_gate_decision(report)
+
+    label = "cover Brier" if "cover" in key else "over Brier"
+    assert label in decision.failures
+    assert label not in decision.pending
+
+
+def test_joint_market_regression_fails_if_any_locked_bootstrap_draw_is_degenerate():
+    frame = pd.DataFrame(
+        {
+            "season": [2021] * 6,
+            "week": [1, 1, 1, 2, 2, 2],
+            "actual": [0.0, 1.0, 2.0, 0.0, 3.0, 6.0],
+            "market": [0.0, 1.0, 2.0, 0.0, 0.0, 0.0],
+            "model": [0.0, 0.0, 0.0, 0.0, 1.0, 2.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="bootstrap draw.*degenerate"):
+        joint_market_regression(frame, "actual", "market", "model", draws=5, seed=0)
+
+
+def test_block_bootstrap_mean_uses_sorted_heterogeneous_multirow_blocks():
+    frame = pd.DataFrame(
+        {
+            "season": [2021, 2022, 2021, 2021, 2022, 2021],
+            "week": [3, 2, 1, 3, 2, 3],
+            "value": [-2.0, 1.0, 0.0, 4.0, 5.0, 10.0],
+        }
+    )
+
+    interval = block_bootstrap_mean(frame, "value", draws=20, seed=7)
+
+    assert interval == BootstrapInterval(estimate=3.0, lower90=2.31, upper90=4.0)
+
+
+def test_joint_market_regression_has_literal_interval_for_heterogeneous_full_rank_blocks():
+    design = ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (2.0, 3.0))
+    noises = (
+        (0.0, 1.0, -1.0, 0.0),
+        (2.0, -1.0, 0.0, 1.0),
+        (-2.0, 0.0, 1.0, -1.0),
+    )
+    keys = ((2021, 1), (2021, 3), (2022, 2))
+    rows = []
+    for (season, week), noise in zip(keys, noises, strict=True):
+        for (market, model), residual in zip(design, noise, strict=True):
+            rows.append(
+                {
+                    "season": season,
+                    "week": week,
+                    "market": market,
+                    "model": model,
+                    "actual": 1.0 + 2.0 * market + 3.0 * model + residual,
+                }
+            )
+    frame = pd.DataFrame(rows).sample(frac=1.0, random_state=11).reset_index(drop=True)
+
+    result = joint_market_regression(frame, "actual", "market", "model", draws=20, seed=7)
+
+    assert result["intercept"] == pytest.approx(1.0)
+    assert result["market_coef"] == pytest.approx(2.0)
+    assert result["model_coef"] == pytest.approx(3.0)
+    assert result["model_coef_lower90"] == pytest.approx(2.6655555555555575)
+    assert result["model_coef_upper90"] == pytest.approx(3.566666666666668)
+
+
+def _cohort_prediction_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
+    spread_lines = (0.0, 1.0, -2.0, 3.0, -4.0, 5.0)
+    margin_edges = (0.0, 2.0, -5.0, 10.0, -15.0, 16.0)
+    margin_outcomes = (-1.0, 1.0, 1.0, 0.0, -1.0, -1.0)
+    total_lines = (40.0, 41.0, 42.0, 43.0, 44.0, 45.0)
+    total_edges = (0.0, -2.0, 5.0, -10.0, 15.0, -16.0)
+    total_outcomes = (1.0, -1.0, -1.0, 0.0, 1.0, 1.0)
+    v1_rows = []
+    v2_rows = []
+    for season in range(2021, 2026):
+        for index in range(6):
+            common = {
+                "game_id": f"{season}-cohort-{index}",
+                "season": season,
+                "week": 1,
+                "margin": spread_lines[index] + margin_outcomes[index],
+                "total_points": total_lines[index] + total_outcomes[index],
+                "spread_line": spread_lines[index],
+                "total_line": total_lines[index],
+            }
+            v1_rows.append(
+                {
+                    **common,
+                    "model_margin": common["margin"] + (2.0 if index % 2 else -2.0),
+                    "model_total": common["total_points"] + (3.0 if index % 2 else -3.0),
+                }
+            )
+            v2_rows.append(
+                {
+                    **common,
+                    "model_margin": spread_lines[index] + margin_edges[index],
+                    "model_total": total_lines[index] + total_edges[index],
+                }
+            )
+    return pd.DataFrame(v1_rows), pd.DataFrame(v2_rows)
+
+
+def _cohort_probabilities(predictions: pd.DataFrame, confidence: float) -> pd.DataFrame:
+    cover = np.where(
+        predictions["margin"] > predictions["spread_line"], confidence, 1.0 - confidence
+    )
+    over = np.where(
+        predictions["total_points"] > predictions["total_line"], confidence, 1.0 - confidence
+    )
+    return pd.DataFrame({"game_id": predictions["game_id"], "cover_prob": cover, "over_prob": over})
+
+
+def _cohort_report(v1: pd.DataFrame, v2: pd.DataFrame) -> dict[str, object]:
+    return evaluate_v2(
+        v1,
+        v2,
+        _cohort_probabilities(v1, 0.6),
+        _cohort_probabilities(v2, 0.7),
+        quality_checks={
+            "correctness": True,
+            "availability": True,
+            "determinism": True,
+            "source_reliability": True,
+        },
+        bootstrap_draws=20,
+        seed=7,
+    )
+
+
+def test_evaluate_v2_reports_exact_cumulative_ats_and_ou_cohorts():
+    v1, v2 = _cohort_prediction_pair()
+
+    report = _cohort_report(v1, v2)
+
+    expected_ats = (
+        (0.0, 15, 10, 5, 25, 30, 0.6),
+        (2.0, 10, 10, 5, 20, 25, 0.5),
+        (5.0, 5, 10, 5, 15, 20, 1.0 / 3.0),
+        (10.0, 5, 5, 5, 10, 15, 0.5),
+        (15.0, 5, 5, 0, 10, 10, 0.5),
+    )
+    expected_ou = (
+        (0.0, 10, 15, 5, 25, 30, 0.4),
+        (2.0, 10, 10, 5, 20, 25, 0.5),
+        (5.0, 5, 10, 5, 15, 20, 1.0 / 3.0),
+        (10.0, 5, 5, 5, 10, 15, 0.5),
+        (15.0, 5, 5, 0, 10, 10, 0.5),
+    )
+    for actual, expected in zip(report["ats_cohorts"], expected_ats, strict=True):
+        threshold, wins, losses, pushes, n, total, rate = expected
+        assert actual["min_edge"] == threshold
+        assert actual["wins"] == wins
+        assert actual["losses"] == losses
+        assert actual["pushes"] == pushes
+        assert actual["n"] == n
+        assert actual["total_picks"] == total
+        assert actual["hit_rate"] == pytest.approx(rate)
+        assert actual["lower90"] == pytest.approx(rate)
+        assert actual["upper90"] == pytest.approx(rate)
+    for actual, expected in zip(report["ou_cohorts"], expected_ou, strict=True):
+        threshold, wins, losses, pushes, n, total, rate = expected
+        assert actual["min_edge"] == threshold
+        assert actual["wins"] == wins
+        assert actual["losses"] == losses
+        assert actual["pushes"] == pushes
+        assert actual["n"] == n
+        assert actual["total_picks"] == total
+        assert actual["hit_rate"] == pytest.approx(rate)
+        assert actual["lower90"] == pytest.approx(rate)
+        assert actual["upper90"] == pytest.approx(rate)
+
+
+@pytest.mark.parametrize("mode, pushes, total", (("all_push", 10, 10), ("empty", 0, 0)))
+def test_evaluate_v2_high_edge_all_push_and_empty_cohorts_are_json_safe(mode, pushes, total):
+    v1, v2 = _cohort_prediction_pair()
+    high = v2["game_id"].str.endswith(("-4", "-5"))
+    if mode == "all_push":
+        for frame in (v1, v2):
+            frame.loc[high, "margin"] = frame.loc[high, "spread_line"]
+            frame.loc[high, "total_points"] = frame.loc[high, "total_line"]
+    else:
+        sign = np.where(v2.loc[high, "model_margin"] > v2.loc[high, "spread_line"], 1.0, -1.0)
+        v2.loc[high, "model_margin"] = v2.loc[high, "spread_line"] + 14.0 * sign
+        sign = np.where(v2.loc[high, "model_total"] > v2.loc[high, "total_line"], 1.0, -1.0)
+        v2.loc[high, "model_total"] = v2.loc[high, "total_line"] + 14.0 * sign
+
+    report = _cohort_report(v1, v2)
+
+    for key in ("ats_cohorts", "ou_cohorts"):
+        cohort = report[key][-1]
+        assert cohort == {
+            "min_edge": 15.0,
+            "wins": 0,
+            "losses": 0,
+            "pushes": pushes,
+            "n": 0,
+            "total_picks": total,
+            "hit_rate": None,
+            "lower90": None,
+            "upper90": None,
+        }
+    json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    "candidate_key, baseline_key, label",
+    (
+        ("cover_brier", "v1_cover_brier", "cover Brier"),
+        ("over_brier", "v1_over_brier", "over Brier"),
+    ),
+)
+def test_research_gate_reports_malformed_brier_even_when_comparison_is_missing(
+    candidate_key, baseline_key, label
+):
+    report = _passing_report()
+    report[candidate_key] = np.nan
+    del report[baseline_key]
+
+    decision = research_gate_decision(report)
+
+    assert label in decision.failures
+    assert label in decision.pending
+
+
+def test_research_gate_rejects_noninteger_season_improvement_counts():
+    report = _passing_report()
+    report["margin_seasons_improved"] = 5.0
+
+    decision = research_gate_decision(report)
+
+    assert "margin season improvement" in decision.failures
