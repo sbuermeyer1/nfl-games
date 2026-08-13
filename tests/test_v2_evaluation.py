@@ -93,6 +93,7 @@ def _probabilities(predictions: pd.DataFrame, *, v2: bool) -> pd.DataFrame:
 def _passing_report() -> dict[str, object]:
     return {
         "report_seasons": [2021, 2022, 2023, 2024, 2025],
+        "n_games": 5,
         "per_season": {
             str(season): {
                 "n_games": 1,
@@ -812,3 +813,126 @@ def test_research_gate_rejects_noninteger_season_improvement_counts():
     decision = research_gate_decision(report)
 
     assert "margin season improvement" in decision.failures
+
+
+@pytest.mark.parametrize("side", ("v1", "v2"))
+@pytest.mark.parametrize("invalid", ("2021", True, np.nan, 2021.5))
+def test_evaluate_v2_rejects_raw_invalid_season_before_filtering(side, invalid):
+    v1, v2 = _prediction_pair()
+    v1_probabilities = _probabilities(v1, v2=False)
+    v2_probabilities = _probabilities(v2, v2=True)
+    frame = v1 if side == "v1" else v2
+    frame["season"] = frame["season"].astype(object)
+    index = frame.index[frame["season"].eq(2021)][0]
+    frame.loc[index, "season"] = invalid
+
+    with pytest.raises(ValueError, match=rf"{side} predictions.*season.*integer"):
+        evaluate_v2(
+            v1,
+            v2,
+            v1_probabilities,
+            v2_probabilities,
+            bootstrap_draws=5,
+        )
+
+
+@pytest.mark.parametrize("invalid", ("2019", True, np.nan, 2019.5))
+def test_walk_forward_calibration_rejects_raw_invalid_season_before_casting(invalid):
+    predictions = _calibration_predictions()
+    predictions["season"] = predictions["season"].astype(object)
+    predictions.loc[predictions.index[0], "season"] = invalid
+
+    with pytest.raises(ValueError, match="calibration predictions.*season.*integer"):
+        walk_forward_probabilities(predictions)
+
+
+@pytest.mark.parametrize("invalid", ("1", True, np.nan, 1.5, 0, -1))
+@pytest.mark.parametrize("consumer", ("evaluation", "calibration"))
+def test_prediction_consumers_reject_invalid_raw_week_before_filtering_or_grouping(
+    consumer, invalid
+):
+    if consumer == "evaluation":
+        v1, v2 = _prediction_pair()
+        index = v2.index[v2["season"].eq(2021)][0]
+        v2["week"] = v2["week"].astype(object)
+        v2.loc[index, "week"] = invalid
+        with pytest.raises(ValueError, match="v2 predictions.*week.*positive integer"):
+            evaluate_v2(
+                v1,
+                v2,
+                _probabilities(v1, v2=False),
+                _probabilities(v2, v2=True),
+                bootstrap_draws=5,
+            )
+    else:
+        predictions = _calibration_predictions()
+        predictions["week"] = predictions["week"].astype(object)
+        predictions.loc[predictions.index[0], "week"] = invalid
+        with pytest.raises(ValueError, match="calibration predictions.*week.*positive integer"):
+            walk_forward_probabilities(predictions)
+
+
+def test_evaluate_v2_invalid_would_be_report_row_cannot_hide_with_omitted_probability():
+    v1, v2 = _prediction_pair()
+    probabilities = _probabilities(v2, v2=True)
+    game_id = "2021-0"
+    v2["season"] = v2["season"].astype(object)
+    v2.loc[v2["game_id"].eq(game_id), "season"] = "2021"
+    probabilities = probabilities.loc[probabilities["game_id"] != game_id]
+
+    with pytest.raises(ValueError, match="v2 predictions.*season.*integer"):
+        evaluate_v2(
+            v1,
+            v2,
+            _probabilities(v1, v2=False),
+            probabilities,
+            bootstrap_draws=5,
+        )
+
+
+def test_prediction_consumers_normalize_integral_float_time_keys():
+    predictions = _calibration_predictions()
+    predictions["season"] = predictions["season"].astype(float)
+    predictions["week"] = predictions["week"].astype(float)
+
+    probabilities = walk_forward_probabilities(predictions)
+
+    assert pd.api.types.is_integer_dtype(probabilities["season"])
+    assert pd.api.types.is_integer_dtype(probabilities["week"])
+
+
+@pytest.mark.parametrize("malformed", (True, "5", 5.0, 5.5))
+def test_research_gate_rejects_malformed_global_game_count(malformed):
+    report = _passing_report()
+    report["n_games"] = malformed
+
+    decision = research_gate_decision(report)
+
+    assert "game count evidence" in decision.failures
+
+
+def test_research_gate_keeps_missing_global_game_count_pending():
+    report = _passing_report()
+    del report["n_games"]
+
+    decision = research_gate_decision(report)
+
+    assert "game count evidence" in decision.pending
+    assert "game count evidence" not in decision.failures
+
+
+def test_research_gate_rejects_global_game_count_inconsistent_with_five_seasons():
+    report = _passing_report()
+    report["n_games"] = 6
+
+    decision = research_gate_decision(report)
+
+    assert "game count evidence" in decision.failures
+
+
+def test_research_gate_accepts_exact_global_game_count_sum():
+    decision = research_gate_decision(_passing_report())
+
+    assert decision.approved
+    assert "game count evidence" not in decision.failures
+    assert "game count evidence" not in decision.pending

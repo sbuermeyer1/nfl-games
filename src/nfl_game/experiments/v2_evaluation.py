@@ -64,6 +64,33 @@ def _as_finite_numeric(frame: pd.DataFrame, columns: tuple[str, ...], label: str
             raise ValueError(f"{label} column {column!r} must contain finite numeric values")
 
 
+def _validated_time_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Validate raw season/week scalars strictly and return normalized integer keys."""
+    _require_columns(frame, ("season", "week"), label)
+    normalized: dict[str, pd.Series] = {}
+    for column in ("season", "week"):
+        values: list[int] = []
+        for raw in frame[column].tolist():
+            if isinstance(raw, (bool, np.bool_)) or not isinstance(
+                raw, (int, float, np.integer, np.floating)
+            ):
+                requirement = "positive integer" if column == "week" else "integer"
+                raise ValueError(f"{label} {column} values must be finite numeric {requirement}s")  # noqa: TRY004
+            numeric = float(raw)
+            if not np.isfinite(numeric) or not numeric.is_integer():
+                requirement = "positive integer" if column == "week" else "integer"
+                raise ValueError(f"{label} {column} values must be finite numeric {requirement}s")
+            value = int(numeric)
+            if column == "week" and value <= 0:
+                raise ValueError(f"{label} week values must be positive integers")
+            values.append(value)
+        normalized[column] = pd.Series(values, index=frame.index, dtype="int64")
+    result = frame.copy()
+    for column, values in normalized.items():
+        result[column] = values
+    return result
+
+
 def block_bootstrap_mean(
     frame: pd.DataFrame,
     value_col: str,
@@ -76,7 +103,8 @@ def block_bootstrap_mean(
     _require_columns(frame, ("season", "week", value_col), "bootstrap frame")
     if frame.empty:
         raise ValueError("bootstrap frame cannot be empty")
-    _as_finite_numeric(frame, ("season", "week", value_col), "bootstrap frame")
+    frame = _validated_time_keys(frame, "bootstrap frame")
+    _as_finite_numeric(frame, (value_col,), "bootstrap frame")
     blocks = [
         group[value_col].to_numpy(dtype=float)
         for _, group in frame.groupby(["season", "week"], sort=True, dropna=False)
@@ -111,11 +139,10 @@ def walk_forward_probabilities(
     """Fit target-specific calibrators only on earlier out-of-sample seasons."""
     _require_columns(predictions, _PREDICTION_COLS, "calibration predictions")
     _validate_ids(predictions, "calibration predictions")
+    predictions = _validated_time_keys(predictions, "calibration predictions")
     _as_finite_numeric(
         predictions,
         (
-            "season",
-            "week",
             "margin",
             "total_points",
             "spread_line",
@@ -125,7 +152,7 @@ def walk_forward_probabilities(
         ),
         "calibration predictions",
     )
-    seasons = predictions["season"].astype(int)
+    seasons = predictions["season"]
     present_seasons = {int(value) for value in seasons.unique()}
     missing_calibration = sorted(set(CALIBRATION_SEASONS).difference(present_seasons))
     if missing_calibration:
@@ -202,7 +229,8 @@ def joint_market_regression(
     _require_columns(frame, columns, "joint market regression frame")
     if frame.empty:
         raise ValueError("joint market regression frame cannot be empty")
-    _as_finite_numeric(frame, columns, "joint market regression frame")
+    frame = _validated_time_keys(frame, "joint market regression frame")
+    _as_finite_numeric(frame, (actual_col, market_col, model_col), "joint market regression frame")
     coefficients = _regression_coefficients(frame, actual_col, market_col, model_col)
     grouped = [group for _, group in frame.groupby(["season", "week"], sort=True)]
     rng = np.random.default_rng(seed)
@@ -347,12 +375,17 @@ def evaluate_v2(
     seed: int = 0,
 ) -> dict[str, Any]:
     """Build complete paired Ridge-v1/v2 evidence for 2021-2025."""
+    validated_predictions: list[pd.DataFrame] = []
     for frame, label in ((v1_predictions, "v1 predictions"), (v2_predictions, "v2 predictions")):
         _require_columns(frame, _PREDICTION_COLS, label)
         _validate_ids(frame, label)
+        validated_predictions.append(_validated_time_keys(frame, label))
+    v1_predictions, v2_predictions = validated_predictions
     v1 = v1_predictions.loc[v1_predictions["season"].isin(REPORT_SEASONS)].copy()
     v2 = v2_predictions.loc[v2_predictions["season"].isin(REPORT_SEASONS)].copy()
-    report_numeric = tuple(column for column in _PREDICTION_COLS if column != "game_id")
+    report_numeric = tuple(
+        column for column in _PREDICTION_COLS if column not in ("game_id", "season", "week")
+    )
     _as_finite_numeric(v1, report_numeric, "v1 report predictions")
     _as_finite_numeric(v2, report_numeric, "v2 report predictions")
     v1_ids = set(v1["game_id"])
@@ -585,6 +618,7 @@ def research_gate_decision(report: Mapping[str, object]) -> PromotionDecision:
     failures: list[str] = []
     pending: list[str] = []
     derived_improvements: tuple[int, int] | None = None
+    derived_n_games: int | None = None
     if "report_seasons" not in report or "per_season" not in report:
         pending.append("outer season evidence")
     elif report.get("report_seasons") != list(REPORT_SEASONS):
@@ -597,6 +631,7 @@ def research_gate_decision(report: Mapping[str, object]) -> PromotionDecision:
         else:
             margin_improved = 0
             total_improved = 0
+            total_games = 0
             valid_seasons = True
             for season in REPORT_SEASONS:
                 evidence = per_season[str(season)]
@@ -614,10 +649,22 @@ def research_gate_decision(report: Mapping[str, object]) -> PromotionDecision:
                     break
                 margin_improved += int(margin_value > 0)
                 total_improved += int(total_value > 0)
+                total_games += n_games
             if valid_seasons:
                 derived_improvements = (margin_improved, total_improved)
+                derived_n_games = total_games
             else:
                 failures.append("outer season evidence")
+
+    if "n_games" not in report or report.get("n_games") is None:
+        pending.append("game count evidence")
+    elif (
+        type(report["n_games"]) is not int
+        or report["n_games"] <= 0
+        or derived_n_games is not None
+        and report["n_games"] != derived_n_games
+    ):
+        failures.append("game count evidence")
 
     def numeric_gate(key: str, label: str, passes: Callable[[float], bool]) -> None:
         raw = report.get(key)
