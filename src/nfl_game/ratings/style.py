@@ -99,7 +99,15 @@ def team_game_style(pbp: pd.DataFrame) -> pd.DataFrame:
     rows["_yardline"] = _numeric(rows, "yardline_100")
     rows["_seconds"] = _numeric(rows, "game_seconds_remaining")
     rows["_qtr"] = _numeric(rows, "qtr")
-    rows["_score_diff"] = _numeric(rows, "posteam_score_differential")
+    score_column = next(
+        (
+            column
+            for column in ("score_differential", "posteam_score_differential")
+            if column in rows
+        ),
+        "score_differential",
+    )
+    rows["_score_diff"] = _numeric(rows, score_column)
 
     output = []
     for key, game in rows.groupby(["game_id", "season", "week", "posteam"], dropna=True):

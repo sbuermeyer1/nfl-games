@@ -38,15 +38,24 @@ def team_game_v2(pbp: pd.DataFrame) -> pd.DataFrame:
     plays["is_sack"] = plays["sack"] == 1
     plays["is_pass_attempt"] = plays["is_pass"] & ~plays["is_sack"]
     plays["is_early_down"] = plays["down"].isin((1, 2))
-    plays["is_neutral"] = plays["qtr"].between(1, 3) & (
-        plays["posteam_score_differential"].abs() <= 8
+    score_column = next(
+        (
+            column
+            for column in ("score_differential", "posteam_score_differential")
+            if column in plays
+        ),
+        None,
     )
+    score_differential = (
+        pd.to_numeric(plays[score_column], errors="coerce")
+        if score_column is not None
+        else pd.Series(np.nan, index=plays.index, dtype=float)
+    )
+    plays["is_neutral"] = plays["qtr"].between(1, 3) & score_differential.abs().le(8)
     dropbacks = plays["qb_dropback"] if "qb_dropback" in plays else plays["pass"]
     plays["is_dropback"] = dropbacks == 1
 
-    grouped = plays.groupby(
-        ["game_id", "season", "week", "posteam", "defteam"], dropna=True
-    )
+    grouped = plays.groupby(["game_id", "season", "week", "posteam", "defteam"], dropna=True)
 
     def aggregate(game: pd.DataFrame) -> pd.Series:
         pass_attempts = game["is_pass_attempt"]
@@ -111,7 +120,9 @@ def v2_team_ratings(
                         "def_rating": f"{window}_def_{target}",
                     }
                 )
-                ratings = fitted if ratings is None else ratings.merge(fitted, on="team", how="outer")
+                ratings = (
+                    fitted if ratings is None else ratings.merge(fitted, on="team", how="outer")
+                )
         ratings.insert(0, "week", int(week))
         ratings.insert(0, "season", int(season))
         frames.append(ratings)
