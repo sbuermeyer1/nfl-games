@@ -160,8 +160,14 @@ def _configs_for_target(manifest: FeatureManifest, target: str) -> tuple[TargetC
     for candidate in CANDIDATES:
         if candidate not in mapping:
             continue
-        if candidate == "C5" and manifest.constants.get("c5_production_eligible") is False:
-            continue
+        if candidate == "C5":
+            flag = manifest.constants.get("c5_production_eligible")
+            if type(flag) is not bool:
+                raise TypeError(
+                    "c5_production_eligible must be a real bool whenever C5 is declared"
+                )
+            if not flag:
+                continue
         if candidate == "C0":
             configs.append(_C0_CONFIG)
         else:
@@ -232,6 +238,8 @@ def _default_target_fitter(
 
 
 def _validate_feature_contract(features: pd.DataFrame, manifest: FeatureManifest) -> None:
+    manifest.validate_selection_contract()
+
     if features.columns.duplicated().any():
         duplicates = features.columns[features.columns.duplicated()].unique().tolist()
         raise ValueError(f"Ridge-v2 features contain duplicate column label(s) {duplicates}")

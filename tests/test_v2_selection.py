@@ -21,6 +21,12 @@ from nfl_game.model.v2_config import (
     FeatureManifest,
     TargetConfig,
     rating_setting_key,
+    rating_variant_physical_column,
+)
+from nfl_game.model.v2_features import (
+    DEFAULT_CONSTANTS,
+    MARGIN_FEATURES_BY_BLOCK,
+    TOTAL_FEATURES_BY_BLOCK,
 )
 
 
@@ -52,31 +58,39 @@ def _score_rows(
 
 
 def _physical_column(canonical: str, short: int, long: int, prior: float) -> str:
-    return f"{canonical}__s{short}_l{long}_p{round(prior * 10):02d}"
+    return rating_variant_physical_column(canonical, short, long, prior)
 
 
-def _variant_contract(canonical: str = "signal") -> dict[str, object]:
+def _variant_contract(*canonicals: str) -> dict[str, object]:
+    canonicals = canonicals or ("signal",)
     variants = {}
     for short, long in RATING_WINDOWS:
         for prior in PRIOR_SEASON_WEIGHTS:
-            physical = _physical_column(canonical, short, long, prior)
+            mapping = {
+                canonical: _physical_column(canonical, short, long, prior)
+                for canonical in canonicals
+            }
             variants[rating_setting_key(short, long, prior)] = {
-                "margin": {canonical: physical},
-                "total": {canonical: physical},
+                "margin": dict(mapping),
+                "total": dict(mapping),
             }
     return {"rating_variant_columns": variants, "c5_production_eligible": False}
 
 
-def _manifest() -> FeatureManifest:
+def _manifest(*, declare_c5: bool = False, c5_eligible: object = False) -> FeatureManifest:
     c0 = tuple(FEATURE_COLS)
     candidate = (*FEATURE_COLS, "signal")
-    columns = {"C0": c0, "C2": candidate, "C4": candidate}
+    columns = {"C0": c0, "C1": candidate, "C2": candidate, "C4": candidate}
+    if declare_c5:
+        columns["C5"] = candidate
+    constants = _variant_contract()
+    constants["c5_production_eligible"] = c5_eligible
     return FeatureManifest(
         version="selection-test",
         margin_by_candidate=columns,
         total_by_candidate=columns,
         sources={},
-        constants=_variant_contract(),
+        constants=constants,
     )
 
 
@@ -181,6 +195,45 @@ def _default_variant_features() -> tuple[pd.DataFrame, FeatureManifest, tuple[in
         constants=_variant_contract("rating_signal"),
     )
     return features, manifest, desired
+
+
+def _contract_manifest(
+    canonicals: tuple[str, ...] = ("rating_a", "rating_b"),
+) -> FeatureManifest:
+    c0 = tuple(FEATURE_COLS)
+    c1 = (*c0, *canonicals)
+    return FeatureManifest(
+        version="strict-rating-contract-test",
+        margin_by_candidate={"C0": c0, "C1": c1},
+        total_by_candidate={"C0": c0, "C1": c1},
+        sources={},
+        constants=_variant_contract(*canonicals),
+    )
+
+
+def _empty_contract_features(
+    canonicals: tuple[str, ...] = ("rating_a", "rating_b"),
+) -> pd.DataFrame:
+    columns = [
+        "game_id",
+        "season",
+        "week",
+        "margin",
+        "total_points",
+        *FEATURE_COLS,
+        *canonicals,
+    ]
+    for short, long in RATING_WINDOWS:
+        for prior in PRIOR_SEASON_WEIGHTS:
+            columns.extend(
+                _physical_column(canonical, short, long, prior) for canonical in canonicals
+            )
+    return pd.DataFrame(
+        {
+            column: pd.Series(dtype="object" if column == "game_id" else "float64")
+            for column in dict.fromkeys(columns)
+        }
+    )
 
 
 def test_selection_contract_constants_are_pinned():
@@ -386,3 +439,188 @@ def test_empty_input_still_rejects_missing_manifested_feature_schema():
     empty = _c0_features(seasons=(2021,), n_per=20).iloc[0:0].drop(columns=FEATURE_COLS[0])
     with pytest.raises(ValueError, match=FEATURE_COLS[0]):
         nested_walk_forward_v2(empty, [2022], _c0_manifest())
+
+
+def test_complete_nine_setting_variant_contract_round_trips_and_validates_on_empty_input():
+    manifest = _contract_manifest()
+    restored = FeatureManifest.from_dict(json.loads(json.dumps(manifest.to_dict())))
+    result = nested_walk_forward_v2(_empty_contract_features(), [2024], restored)
+    assert result.predictions.empty
+    variants = restored.constants["rating_variant_columns"]
+    assert set(variants) == {
+        rating_setting_key(short, long, prior)
+        for short, long in RATING_WINDOWS
+        for prior in PRIOR_SEASON_WEIGHTS
+    }
+    for short, long in RATING_WINDOWS:
+        for prior in PRIOR_SEASON_WEIGHTS:
+            setting = variants[rating_setting_key(short, long, prior)]
+            for target in ("margin", "total"):
+                assert set(setting[target]) == {"rating_a", "rating_b"}
+                assert setting[target] == {
+                    canonical: _physical_column(canonical, short, long, prior)
+                    for canonical in ("rating_a", "rating_b")
+                }
+
+
+def test_real_default_manifest_round_trip_pins_every_c1_variant_column():
+    def cumulative(blocks):
+        columns = []
+        result = {}
+        for candidate, added in blocks.items():
+            columns.extend(added)
+            result[candidate] = tuple(dict.fromkeys(columns))
+        return result
+
+    manifest = FeatureManifest(
+        version="real-default-round-trip-test",
+        margin_by_candidate=cumulative(MARGIN_FEATURES_BY_BLOCK),
+        total_by_candidate=cumulative(TOTAL_FEATURES_BY_BLOCK),
+        sources={},
+        constants=DEFAULT_CONSTANTS,
+    )
+    restored = FeatureManifest.from_dict(json.loads(json.dumps(manifest.to_dict())))
+    restored.validate_selection_contract()
+
+    for target, blocks in (
+        ("margin", MARGIN_FEATURES_BY_BLOCK),
+        ("total", TOTAL_FEATURES_BY_BLOCK),
+    ):
+        c0 = set(blocks["C0"])
+        expected = tuple(column for column in blocks["C1"] if column not in c0)
+        if target == "margin":
+            assert "home_indicator" in expected
+        for short, long in RATING_WINDOWS:
+            for prior in PRIOR_SEASON_WEIGHTS:
+                config = TargetConfig("C1", 1.0, short, long, prior)
+                mapping = restored.rating_variant_columns(target, config)
+                assert tuple(mapping) == expected
+                assert mapping == {
+                    canonical: _physical_column(canonical, short, long, prior)
+                    for canonical in expected
+                }
+
+
+def test_all_nine_settings_cannot_alias_physical_columns_to_canonical_names():
+    payload = _contract_manifest().to_dict()
+    for setting in payload["constants"]["rating_variant_columns"].values():
+        for target in ("margin", "total"):
+            setting[target] = {canonical: canonical for canonical in ("rating_a", "rating_b")}
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="exact.*physical"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+@pytest.mark.parametrize("mutation", ("incomplete", "extra"))
+def test_variant_mapping_must_equal_the_complete_c1_minus_c0_canonical_set(mutation):
+    payload = _contract_manifest().to_dict()
+    first = next(iter(payload["constants"]["rating_variant_columns"].values()))["margin"]
+    if mutation == "incomplete":
+        first.pop("rating_b")
+    else:
+        first["rogue_feature"] = "rogue_feature__s4_l16_p04"
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="canonical.*set"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+def test_variant_mapping_rejects_physical_reuse_within_a_setting():
+    payload = _contract_manifest().to_dict()
+    first = next(iter(payload["constants"]["rating_variant_columns"].values()))["margin"]
+    first["rating_b"] = first["rating_a"]
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="physical.*reuse|exact.*physical"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+def test_variant_mapping_rejects_a_physical_name_from_the_wrong_setting():
+    payload = _contract_manifest().to_dict()
+    variants = payload["constants"]["rating_variant_columns"]
+    keys = list(variants)
+    variants[keys[1]]["total"]["rating_a"] = variants[keys[0]]["total"]["rating_a"]
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="exact.*physical|wrong.*setting"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+@pytest.mark.parametrize(
+    "leak",
+    (
+        "margin",
+        "total_points",
+        "spread_line",
+        "cover_prob",
+        "game_id",
+        "season",
+        "home_team",
+        "net_rating_diff",
+    ),
+)
+def test_variant_physical_mapping_cannot_point_to_outcome_market_identity_or_canonical_data(leak):
+    payload = _contract_manifest().to_dict()
+    first = next(iter(payload["constants"]["rating_variant_columns"].values()))["margin"]
+    first["rating_a"] = leak
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="exact.*physical|forbidden"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+def test_empty_input_rejects_duplicate_manifest_feature_labels_before_presence_checks():
+    payload = _contract_manifest().to_dict()
+    payload["margin_by_candidate"]["C1"].append("rating_a")
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="duplicate.*manifest.*rating_a"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+def test_empty_input_rejects_an_unsupported_manifest_candidate_before_presence_checks():
+    payload = _contract_manifest().to_dict()
+    payload["margin_by_candidate"]["C9"] = list(payload["margin_by_candidate"]["C1"])
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="unsupported.*C9"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+def test_non_c0_candidate_requires_c1_and_must_contain_the_complete_c1_contract():
+    payload = _contract_manifest().to_dict()
+    payload["margin_by_candidate"]["C2"] = list(FEATURE_COLS)
+    payload["total_by_candidate"]["C2"] = list(FEATURE_COLS)
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="C2.*complete C1|C1.*C2"):
+        nested_walk_forward_v2(_empty_contract_features(), [2024], manifest)
+
+
+def test_later_candidate_without_a_declared_c1_contract_fails_closed():
+    payload = _manifest().to_dict()
+    payload["margin_by_candidate"].pop("C1")
+    payload["total_by_candidate"].pop("C1")
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises(ValueError, match="requires.*C1"):
+        nested_walk_forward_v2(_features().iloc[0:0], [2024], manifest)
+
+
+@pytest.mark.parametrize("invalid", (None, "false", 0, 1))
+def test_declared_c5_requires_a_real_boolean_eligibility_flag(invalid):
+    manifest = _manifest(declare_c5=True, c5_eligible=invalid)
+    with pytest.raises((TypeError, ValueError), match="c5_production_eligible.*bool"):
+        nested_walk_forward_v2(_features().iloc[0:0], [2024], manifest)
+
+
+def test_declared_c5_requires_the_eligibility_flag_to_be_present():
+    payload = _manifest(declare_c5=True).to_dict()
+    payload["constants"].pop("c5_production_eligible")
+    manifest = FeatureManifest.from_dict(payload)
+    with pytest.raises((TypeError, ValueError), match="c5_production_eligible.*bool"):
+        nested_walk_forward_v2(_features().iloc[0:0], [2024], manifest)
+
+
+@pytest.mark.parametrize("eligible, expected", ((False, False), (True, True)))
+def test_c5_enters_the_grid_only_when_eligibility_is_explicitly_true(eligible, expected):
+    fitter = _RecordingFitter()
+    nested_walk_forward_v2(
+        _features(through=2022),
+        [2022],
+        _manifest(declare_c5=True, c5_eligible=eligible),
+        target_fitter=fitter,
+    )
+    assert any(call["config"].candidate == "C5" for call in fitter.calls) is expected

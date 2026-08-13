@@ -19,6 +19,7 @@ from nfl_game.model.v2_config import (
     RATING_WINDOWS,
     FeatureManifest,
     rating_setting_key,
+    rating_variant_physical_column,
 )
 
 GAME_KEYS = ("game_id", "season", "week")
@@ -202,23 +203,14 @@ DEFAULT_SOURCES = {
 }
 
 
-_MARGIN_RATING_VARIANT_FEATURES = tuple(
-    column
-    for column in MARGIN_FEATURES_BY_BLOCK["C1"]
-    if column not in {"rest_diff", "home_indicator", "div_game"}
-)
-_TOTAL_RATING_VARIANT_FEATURES = tuple(
-    column
-    for column in TOTAL_FEATURES_BY_BLOCK["C1"]
-    if column not in {"is_dome", "temp_outdoor", "wind_outdoor"}
-)
+def _c1_variant_features(blocks: Mapping[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """Return the exact cumulative C1-minus-C0 contract in stable feature order."""
+    c0 = set(blocks["C0"])
+    return tuple(column for column in blocks["C1"] if column not in c0)
 
 
-def _rating_variant_physical_column(
-    canonical: str, short_halflife: int, long_halflife: int, prior_season_weight: float
-) -> str:
-    weight = round(prior_season_weight * 10)
-    return f"{canonical}__s{short_halflife}_l{long_halflife}_p{weight:02d}"
+_MARGIN_RATING_VARIANT_FEATURES = _c1_variant_features(MARGIN_FEATURES_BY_BLOCK)
+_TOTAL_RATING_VARIANT_FEATURES = _c1_variant_features(TOTAL_FEATURES_BY_BLOCK)
 
 
 def _rating_variant_contract() -> Mapping[str, object]:
@@ -233,7 +225,7 @@ def _rating_variant_contract() -> Mapping[str, object]:
             ):
                 targets[target] = MappingProxyType(
                     {
-                        column: _rating_variant_physical_column(
+                        column: rating_variant_physical_column(
                             column, short_halflife, long_halflife, prior_season_weight
                         )
                         for column in columns
