@@ -91,9 +91,9 @@ def _prepared_depth(depth_charts: pd.DataFrame) -> pd.DataFrame:
 def _depth_change(depth: pd.DataFrame, season: int, week: int, team: str, cutoff: pd.Timestamp) -> float:
     rows = depth[(depth["season"] == season) & depth["team"].eq(team)]
     if season < 2025:
-        rows = rows[(rows["week"] <= week) & (rows["dt"].isna() | (rows["dt"] <= cutoff))]
-        moments = sorted(rows["week"].dropna().unique())[-2:]
-        snapshots = [rows[rows["week"] == moment] for moment in moments]
+        rows = rows[(rows["week"] == week) & (rows["dt"].isna() | (rows["dt"] <= cutoff))]
+        moments = sorted(rows["dt"].dropna().unique())[-2:]
+        snapshots = [rows[rows["dt"] == moment] for moment in moments]
     else:
         rows = rows[rows["dt"].notna() & (rows["dt"] <= cutoff)]
         moments = sorted(rows["dt"].unique())[-2:]
@@ -147,8 +147,10 @@ def personnel_features_for_targets(
         else:
             history = raw[(raw["season"] == target.season) & (raw["week"] < target.week) & raw["team"].eq(target.team)]
         off_returning, off_hhi, off_coverage = _snap_features(history, "offense_snaps", roster)
-        def_returning, def_hhi, def_coverage = _snap_features(history, "defense_snaps", roster)
-        coverage = min(off_coverage, def_coverage)
+        def_returning, def_hhi, _def_coverage = _snap_features(history, "defense_snaps", roster)
+        total_snap_mass = float(history[["offense_snaps", "defense_snaps"]].sum().sum())
+        mapped_snap_mass = float(history.dropna(subset=["player_id"])[["offense_snaps", "defense_snaps"]].sum().sum())
+        coverage = mapped_snap_mass / total_snap_mass if total_snap_mass else 1.0
         results.append({
             "season": target.season, "week": target.week, "team": target.team,
             "off_returning_share": off_returning if target.week == 1 else 0.0,
@@ -156,7 +158,7 @@ def personnel_features_for_targets(
             "off_snap_hhi": 0.0 if target.week == 1 else off_hhi,
             "def_snap_hhi": 0.0 if target.week == 1 else def_hhi,
             "depth_chart_change_rate": _depth_change(depth, target.season, target.week, target.team, target.cutoff),
-            "roster_churn": 1.0 - off_returning if target.week == 1 and history["offense_snaps"].sum() else 0.0,
+            "roster_churn": 1.0 - off_returning if target.week == 1 and history["offense_snaps"].sum() and off_coverage > 0 else 0.0,
             "id_coverage": coverage,
             "personnel_imputed": int(coverage < 0.9),
         })

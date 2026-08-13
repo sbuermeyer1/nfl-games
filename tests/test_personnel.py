@@ -84,24 +84,6 @@ def test_depth_chart_change_compares_player_ids_in_each_slot():
     assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(0.5)
 
 
-def test_post_cutoff_snapshots_do_not_change_features():
-    inputs = personnel_inputs()
-    before = personnel_features_for_targets(**inputs)
-    inputs["rosters"] = pd.concat([inputs["rosters"], pd.DataFrame([{"season": 2025, "week": 2, "team": "BUF", "gsis_id": "gsis-x", "dt": "2025-09-15T00:00:00Z"}])], ignore_index=True)
-    inputs["depth_charts"] = pd.concat([inputs["depth_charts"], pd.DataFrame([{"season": 2025, "week": 2, "team": "BUF", "gsis_id": "gsis-x", "depth_chart_position": "QB1", "dt": "2025-09-15T00:00:00Z"}])], ignore_index=True)
-    after = personnel_features_for_targets(**inputs)
-    pd.testing.assert_frame_equal(before, after)
-
-
-def test_pre_2025_snapshots_are_eligible_only_for_the_labeled_week():
-    inputs = personnel_inputs(targets=[(2024, 2)])
-    inputs["rosters"] = pd.DataFrame(
-        [{"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-a", "dt": "2024-09-01T12:00:00Z"}]
-    )
-    out = personnel_features_for_targets(**inputs).set_index("team")
-    assert out.loc["BUF", "roster_churn"] == pytest.approx(0.0)
-
-
 def test_low_identifier_coverage_is_imputed_without_counting_unmapped_as_departure():
     inputs = personnel_inputs(targets=[(2025, 1)])
     inputs["snaps"] = inputs["snaps"].query("not (season == 2024 and pfr_player_id == 'pfr-c')").copy()
@@ -122,16 +104,6 @@ def test_normalize_snap_counts_preserves_only_mapped_gsis_identity():
     ]
 
 
-def test_pre_2025_labeled_snapshot_after_cutoff_is_not_eligible():
-    inputs = personnel_inputs(targets=[(2024, 2)])
-    inputs["rosters"] = pd.DataFrame(
-        [{"season": 2024, "week": 2, "team": "BUF", "gsis_id": "gsis-a", "dt": "2024-09-16T12:00:00Z"}]
-    )
-    inputs["snaps"] = inputs["snaps"].query("season == 2024").copy()
-    out = personnel_features_for_targets(**inputs).set_index("team")
-    assert out.loc["BUF", "off_snap_hhi"] == pytest.approx(0.0)
-
-
 def test_pre_2025_depth_snapshot_after_cutoff_does_not_change_chart():
     inputs = personnel_inputs(targets=[(2024, 2)])
     inputs["depth_charts"] = pd.DataFrame(
@@ -142,3 +114,87 @@ def test_pre_2025_depth_snapshot_after_cutoff_does_not_change_chart():
     )
     out = personnel_features_for_targets(**inputs).set_index("team")
     assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(0.0)
+
+
+def test_zero_mapped_prior_offense_is_neutral_churn_not_departure():
+    inputs = personnel_inputs(targets=[(2025, 1)])
+    inputs["snaps"] = inputs["snaps"].query("season != 2024").copy()
+    inputs["snaps"] = pd.concat(
+        [
+            inputs["snaps"],
+            pd.DataFrame(
+                [{"season": 2024, "week": 18, "team": "BUF", "pfr_player_id": "unknown", "offense_snaps": 100, "defense_snaps": 0}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+    assert out["off_returning_share"] == pytest.approx(0.0)
+    assert out["roster_churn"] == pytest.approx(0.0)
+    assert out["personnel_imputed"] == 1
+
+
+def test_identifier_coverage_combines_offense_and_defense_snap_mass():
+    inputs = personnel_inputs(targets=[(2025, 1)])
+    inputs["snaps"] = pd.DataFrame(
+        [
+            {"season": 2024, "week": 18, "team": "BUF", "pfr_player_id": "pfr-a", "offense_snaps": 80, "defense_snaps": 100},
+            {"season": 2024, "week": 18, "team": "BUF", "pfr_player_id": "unknown", "offense_snaps": 20, "defense_snaps": 0},
+        ]
+    )
+    out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+    assert out["id_coverage"] == pytest.approx(0.9)
+    assert out["personnel_imputed"] == 0
+
+
+def test_pre_2025_depth_uses_only_exact_target_week_snapshots():
+    inputs = personnel_inputs(targets=[(2024, 2)])
+    inputs["depth_charts"] = pd.DataFrame(
+        [
+            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-a", "depth_chart_position": "QB1", "dt": "2024-09-08T10:00:00Z"},
+            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-d", "depth_chart_position": "QB1", "dt": "2024-09-09T10:00:00Z"},
+            {"season": 2024, "week": 2, "team": "BUF", "gsis_id": "gsis-b", "depth_chart_position": "QB1", "dt": "2024-09-14T10:00:00Z"},
+        ]
+    )
+    out = personnel_features_for_targets(**inputs).set_index("team")
+    assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(0.0)
+
+
+def test_post_cutoff_roster_snapshot_does_not_change_week_one_continuity():
+    inputs = personnel_inputs(targets=[(2025, 1)])
+    before = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+    assert before["off_returning_share"] == pytest.approx(0.75)
+    assert before["roster_churn"] == pytest.approx(0.25)
+    inputs["rosters"] = pd.concat(
+        [
+            inputs["rosters"],
+            pd.DataFrame(
+                [{"season": 2025, "week": 1, "team": "BUF", "gsis_id": "gsis-x", "dt": "2025-09-08T12:00:00Z"}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    after = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+    pd.testing.assert_series_equal(before, after)
+
+
+def test_pre_2025_roster_ignores_off_week_snapshot_for_week_one_continuity():
+    inputs = personnel_inputs(targets=[(2024, 1)])
+    inputs["schedules"] = pd.DataFrame(
+        [{"season": 2024, "week": 1, "home_team": "BUF", "away_team": "MIA", "kickoff_at": "2024-09-08T17:00:00Z"}]
+    )
+    inputs["snaps"] = pd.DataFrame(
+        [
+            {"season": 2023, "week": 18, "team": "BUF", "pfr_player_id": "pfr-a", "offense_snaps": 75, "defense_snaps": 0},
+            {"season": 2023, "week": 18, "team": "BUF", "pfr_player_id": "pfr-c", "offense_snaps": 25, "defense_snaps": 0},
+        ]
+    )
+    inputs["rosters"] = pd.DataFrame(
+        [
+            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-a", "dt": "2024-09-01T12:00:00Z"},
+            {"season": 2024, "week": 2, "team": "BUF", "gsis_id": "gsis-x", "dt": "2024-09-02T12:00:00Z"},
+        ]
+    )
+    out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+    assert out["off_returning_share"] == pytest.approx(0.75)
+    assert out["roster_churn"] == pytest.approx(0.25)
