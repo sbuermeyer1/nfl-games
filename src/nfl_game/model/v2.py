@@ -17,6 +17,17 @@ from nfl_game.model.v2_config import (
 TargetName = Literal["margin", "total_points"]
 
 
+def _duplicate_names(columns: pd.Index | list[str]) -> list[object]:
+    index = pd.Index(columns)
+    return index[index.duplicated()].unique().tolist()
+
+
+def _reject_duplicate_column_labels(frame: pd.DataFrame, *, context: str) -> None:
+    duplicates = _duplicate_names(frame.columns)
+    if duplicates:
+        raise ValueError(f"{context} contains duplicate column label(s) {duplicates}")
+
+
 def _manifest_columns(
     target: TargetName,
     config: TargetConfig,
@@ -32,6 +43,11 @@ def _manifest_columns(
     if not columns:
         raise ValueError(
             f"manifest {manifest_target}/{config.candidate} schema has no candidate columns"
+        )
+    duplicates = _duplicate_names(columns)
+    if duplicates:
+        raise ValueError(
+            f"duplicate column(s) in manifest {manifest_target}/{config.candidate}: {duplicates}"
         )
     forbidden = sorted((MARKET_COLUMNS | MARKET_PROBABILITY_COLUMNS).intersection(columns))
     if forbidden:
@@ -98,6 +114,7 @@ def fit_target_ridge(
 ) -> Pipeline:
     if target not in {"margin", "total_points"}:
         raise ValueError(f"unsupported Ridge-v2 target {target!r}")
+    _reject_duplicate_column_labels(train, context="training frame")
     if target not in train.columns:
         raise ValueError(f"training frame is missing target column {target!r}")
 
@@ -146,6 +163,7 @@ class RidgeV2Model:
     def predict(self, frame: pd.DataFrame) -> pd.DataFrame:
         if self._margin is None or self._total is None:
             raise RuntimeError("call fit() before predict()")
+        _reject_duplicate_column_labels(frame, context="predict() input")
         if "game_id" not in frame.columns:
             raise ValueError("predict() input is missing required column 'game_id'")
         if frame["game_id"].isna().any():
@@ -167,6 +185,14 @@ class RidgeV2Model:
             target="total_points",
             training=False,
         )
+        if frame.empty:
+            return pd.DataFrame(
+                {
+                    "game_id": frame["game_id"].to_numpy(),
+                    "model_margin": np.empty(0, dtype=float),
+                    "model_total": np.empty(0, dtype=float),
+                }
+            )
         return pd.DataFrame(
             {
                 "game_id": frame["game_id"].to_numpy(),

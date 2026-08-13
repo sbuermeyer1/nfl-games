@@ -221,8 +221,72 @@ def test_predict_rejects_duplicate_game_id_values():
         model.predict(bad)
 
 
+def test_predict_returns_an_empty_exact_schema_for_a_valid_empty_slate():
+    model = RidgeV2Model(_config(), _manifest()).fit(_training_rows())
+
+    predicted = model.predict(_probe_rows().iloc[0:0])
+
+    assert list(predicted.columns) == ["game_id", "model_margin", "model_total"]
+    assert predicted.empty
+
+
+@pytest.mark.parametrize("missing", ("margin_signal", "total_signal"))
+def test_empty_prediction_still_requires_each_target_feature_set(missing):
+    model = RidgeV2Model(_config(), _manifest()).fit(_training_rows())
+    empty = _probe_rows().iloc[0:0].drop(columns=missing)
+
+    with pytest.raises(ValueError, match=missing):
+        model.predict(empty)
+
+
+def test_fit_rejects_a_duplicate_selected_feature_label():
+    train = pd.concat([_training_rows(), _training_rows()[["margin_signal"]]], axis=1)
+
+    with pytest.raises(ValueError, match="duplicate column label.*margin_signal"):
+        RidgeV2Model(_config(), _manifest()).fit(train)
+
+
+def test_fit_rejects_a_duplicate_target_label():
+    train = pd.concat([_training_rows(), _training_rows()[["margin"]]], axis=1)
+
+    with pytest.raises(ValueError, match="duplicate column label.*margin"):
+        RidgeV2Model(_config(), _manifest()).fit(train)
+
+
+def test_predict_rejects_a_duplicate_game_id_label_before_empty_return():
+    model = RidgeV2Model(_config(), _manifest()).fit(_training_rows())
+    empty = _probe_rows().iloc[0:0]
+    duplicate_game_id = pd.concat([empty, empty[["game_id"]]], axis=1)
+
+    with pytest.raises(ValueError, match="duplicate column label.*game_id"):
+        model.predict(duplicate_game_id)
+
+
+def test_predict_rejects_a_duplicate_selected_feature_label_before_empty_return():
+    model = RidgeV2Model(_config(), _manifest()).fit(_training_rows())
+    empty = _probe_rows().iloc[0:0]
+    duplicate_feature = pd.concat([empty, empty[["total_signal"]]], axis=1)
+
+    with pytest.raises(ValueError, match="duplicate column label.*total_signal"):
+        model.predict(duplicate_feature)
+
+
+def test_fit_rejects_a_duplicate_column_in_the_manifest_schema():
+    manifest = FeatureManifest(
+        version="ridge-v2-duplicate-schema",
+        margin_by_candidate={"C0": ("margin_signal", "margin_signal")},
+        total_by_candidate={"C1": ("total_signal", "total_imputed_any")},
+        sources={},
+        constants={},
+    )
+
+    with pytest.raises(ValueError, match="duplicate.*manifest.*margin_signal"):
+        RidgeV2Model(_config(), manifest).fit(_training_rows())
+
+
 def test_failed_second_target_fit_does_not_leave_a_partially_fitted_model():
     model = RidgeV2Model(_config(), _manifest())
+    model.fit(_training_rows())
     bad = _training_rows()
     bad["total_signal"] = 42.0
 
@@ -230,6 +294,51 @@ def test_failed_second_target_fit_does_not_leave_a_partially_fitted_model():
         model.fit(bad)
     with pytest.raises(RuntimeError, match="fit"):
         model.predict(_probe_rows())
+
+
+def test_boolean_typed_binary_flags_work_through_fit_and_predict():
+    train = _training_rows()
+    probe = _probe_rows()
+    for frame in (train, probe):
+        frame["margin_imputed_any"] = frame["margin_imputed_any"].astype(bool)
+        frame["total_imputed_any"] = frame["total_imputed_any"].astype(bool)
+
+    predicted = RidgeV2Model(_config(), _manifest()).fit(train).predict(probe)
+
+    assert predicted[["model_margin", "model_total"]].notna().all().all()
+
+
+def test_coercible_numeric_string_features_match_numeric_predictions():
+    numeric = RidgeV2Model(_config(), _manifest()).fit(_training_rows()).predict(_probe_rows())
+    train = _training_rows()
+    probe = _probe_rows()
+    for frame in (train, probe):
+        frame["margin_signal"] = frame["margin_signal"].astype(str)
+        frame["total_signal"] = frame["total_signal"].astype(str)
+
+    coerced = RidgeV2Model(_config(), _manifest()).fit(train).predict(probe)
+
+    np.testing.assert_allclose(coerced["model_margin"], numeric["model_margin"])
+    np.testing.assert_allclose(coerced["model_total"], numeric["model_total"])
+
+
+def test_fit_rejects_a_nonnumeric_selected_feature_string():
+    train = _training_rows()
+    train["margin_signal"] = train["margin_signal"].astype(object)
+    train.loc[0, "margin_signal"] = "not-a-number"
+
+    with pytest.raises(ValueError, match="numeric"):
+        RidgeV2Model(_config(), _manifest()).fit(train)
+
+
+def test_predict_rejects_a_nonnumeric_selected_feature_string():
+    model = RidgeV2Model(_config(), _manifest()).fit(_training_rows())
+    probe = _probe_rows()
+    probe["total_signal"] = probe["total_signal"].astype(object)
+    probe.loc[0, "total_signal"] = "not-a-number"
+
+    with pytest.raises(ValueError, match="numeric"):
+        model.predict(probe)
 
 
 def test_fitted_state_does_not_leak_between_model_instances():
