@@ -54,12 +54,22 @@ def _numeric(rows: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _ordered_drive(drive: pd.DataFrame) -> pd.DataFrame:
-    """Put a drive into play order, independent of source row order."""
+    """Put a drive into deterministic chronological order, independent of source row order."""
     ordered = drive.copy()
     play_id = _numeric(ordered, "play_id")
-    if play_id.notna().any():
+    if play_id.notna().all() and play_id.is_unique:
         return ordered.assign(_play_order=play_id).sort_values("_play_order", kind="stable")
-    return ordered.sort_values(["_qtr", "_seconds"], ascending=[True, False], kind="stable")
+
+    canonical_columns = sorted(ordered.columns)
+    canonical = ordered[canonical_columns].apply(
+        lambda row: "\x1f".join(str(value) for value in row), axis=1
+    )
+    return ordered.assign(_partial_play_id=play_id, _canonical_order=canonical).sort_values(
+        ["_qtr", "_seconds", "_partial_play_id", "_canonical_order"],
+        ascending=[True, False, True, True],
+        na_position="last",
+        kind="stable",
+    )
 
 
 def team_game_style(pbp: pd.DataFrame) -> pd.DataFrame:

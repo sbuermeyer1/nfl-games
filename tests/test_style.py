@@ -239,3 +239,29 @@ def test_overlapping_interception_and_lost_fumble_is_one_turnover_play():
 
     assert buf["n_turnovers"] == 2
     assert buf["turnover_rate"] == pytest.approx(2 / 6)
+
+
+def test_partial_play_ids_fall_back_to_chronology_for_pace_and_drive_start():
+    pbp = style_pbp().copy()
+    pbp["play_id"] = None
+    pbp.loc[pbp.index[1], "play_id"] = 2
+    pbp.loc[pbp.index[2], "play_id"] = 3
+    buf = team_game_style(pbp).set_index("team").loc["BUF"]
+
+    assert buf["pace_seconds"] == pytest.approx(27.0)
+    assert buf["starting_field_position"] == pytest.approx(32.5)
+
+
+def test_tied_fallback_clocks_are_independent_of_input_order():
+    pbp = style_pbp().copy()
+    pbp["play_id"] = None
+    pbp.loc[pbp.index[:2], "game_seconds_remaining"] = 900
+    forward = team_game_style(pbp).set_index("team").loc["BUF"]
+    reversed_rows = (
+        team_game_style(pbp.iloc[::-1].reset_index(drop=True)).set_index("team").loc["BUF"]
+    )
+
+    pd.testing.assert_series_equal(
+        forward[["pace_seconds", "starting_field_position"]],
+        reversed_rows[["pace_seconds", "starting_field_position"]],
+    )
