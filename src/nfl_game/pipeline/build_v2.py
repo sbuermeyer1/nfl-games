@@ -38,6 +38,13 @@ from nfl_game.ratings.v2_team import V2_RATING_TARGETS, team_game_v2, v2_team_ra
 V2_HISTORICAL_SEASONS = tuple(range(2015, 2026))
 V2_EVALUATION_SEASONS = tuple(range(2021, 2026))
 
+# Frozen Ridge-v1 artifacts. The plan's global constraint is that v1, its calibration and
+# its recorded baseline stay untouched, so no v2 destination may resolve to one of these
+# names -- the writer replaces whatever path it is handed.
+PROTECTED_V1_ARTIFACT_NAMES = frozenset(
+    {"game_features.parquet", "tracker_ledger.parquet", "schedule_2026.parquet"}
+)
+
 _DEFAULT_RATING_SETTING = (8, 24, 0.6)
 _GAME_KEYS = ("game_id", "season", "week")
 _TEAM_WEEK_KEYS = ("season", "week", "team")
@@ -230,6 +237,7 @@ def _block_coverage(
     numeric_columns: Sequence[str],
     *,
     production_eligible: bool,
+    evaluation_seasons: Sequence[int],
 ) -> dict[str, object]:
     missing = sorted({*_TEAM_WEEK_KEYS, *numeric_columns}.difference(block.columns))
     if missing:
@@ -248,10 +256,10 @@ def _block_coverage(
     )
     complete = numeric.notna().all(axis=1) & finite.all(axis=1)
     season_values: dict[str, float] = {}
-    for season in V2_EVALUATION_SEASONS:
+    for season in evaluation_seasons:
         mask = joined["season"].eq(season)
         if not mask.any():
-            continue
+            raise ValueError(f"{name} block has no rows for required evaluation season {season}")
         coverage = float(complete.loc[mask].mean())
         season_values[str(season)] = coverage
         if production_eligible and coverage < 0.90:
@@ -277,6 +285,7 @@ def _c1_numeric_columns() -> tuple[str, ...]:
 def _assemble_blocks(
     inputs: V2BuildInputs,
     base: pd.DataFrame,
+    evaluation_seasons: Sequence[int],
 ) -> tuple[
     dict[tuple[int, int, float], pd.DataFrame],
     dict[str, pd.DataFrame],
@@ -315,17 +324,19 @@ def _assemble_blocks(
     blocks = {"C1": default_ratings, "C2": qb, "C3": style, "C4": personnel, "C5": pfr}
 
     expected = _target_team_weeks(normalized_base)
+    gated = {"production_eligible": True, "evaluation_seasons": evaluation_seasons}
     coverage: dict[str, object] = {
-        "C1": _block_coverage(
-            "C1", default_ratings, expected, _c1_numeric_columns(), production_eligible=True
-        ),
-        "C2": _block_coverage("C2", qb, expected, QB_FEATURE_COLS, production_eligible=True),
-        "C3": _block_coverage("C3", style, expected, STYLE_FEATURE_COLS, production_eligible=True),
-        "C4": _block_coverage(
-            "C4", personnel, expected, PERSONNEL_FEATURE_COLS, production_eligible=True
-        ),
+        "C1": _block_coverage("C1", default_ratings, expected, _c1_numeric_columns(), **gated),
+        "C2": _block_coverage("C2", qb, expected, QB_FEATURE_COLS, **gated),
+        "C3": _block_coverage("C3", style, expected, STYLE_FEATURE_COLS, **gated),
+        "C4": _block_coverage("C4", personnel, expected, PERSONNEL_FEATURE_COLS, **gated),
         "C5": _block_coverage(
-            "C5", pfr, expected, (*PFR_OUTPUT_COLS, "pfr_imputed"), production_eligible=False
+            "C5",
+            pfr,
+            expected,
+            (*PFR_OUTPUT_COLS, "pfr_imputed"),
+            production_eligible=False,
+            evaluation_seasons=evaluation_seasons,
         ),
     }
     coverage["C5"]["pfr_rec_drop_rate_2025"] = 0.6912  # type: ignore[index]
@@ -377,6 +388,7 @@ def _build_manifest(
     source_snapshots: Sequence[SourceSnapshot],
     coverage: Mapping[str, object],
     retrieved_at: datetime,
+    evaluation_seasons: Sequence[int],
 ) -> dict[str, object]:
     snapshots = [_snapshot_payload(snapshot) for snapshot in source_snapshots]
     payload: dict[str, object] = {
@@ -384,7 +396,7 @@ def _build_manifest(
         "feature_schema_version": feature_manifest.version,
         "build_timestamp": retrieved_at.isoformat(),
         "historical_seasons": list(V2_HISTORICAL_SEASONS),
-        "evaluation_seasons": list(V2_EVALUATION_SEASONS),
+        "evaluation_seasons": list(evaluation_seasons),
         "feature_manifest": feature_manifest.to_dict(),
         "source_snapshots": snapshots,
         "source_manifest_sha256": _semantic_json_digest(snapshots),
@@ -408,6 +420,7 @@ def build_v2_artifacts(
     inputs: V2BuildInputs,
     *,
     retrieved_at: datetime,
+    evaluation_seasons: Sequence[int] = V2_EVALUATION_SEASONS,
 ) -> V2BuildArtifacts:
     """Build deterministic Ridge-v2 payloads without writing to disk."""
     _require_utc(retrieved_at)
@@ -419,7 +432,7 @@ def build_v2_artifacts(
     )
 
     base = _historical_regular_base(inputs)
-    ratings_by_setting, blocks, coverage = _assemble_blocks(inputs, base)
+    ratings_by_setting, blocks, coverage = _assemble_blocks(inputs, base, evaluation_seasons)
     bundle = build_v2_game_features(normalize_team_codes(base, ["home_team", "away_team"]), blocks)
     bundle.manifest.validate_selection_contract()
     with_variants = _add_rating_variants(bundle.frame, base, ratings_by_setting, bundle.manifest)
@@ -431,7 +444,9 @@ def build_v2_artifacts(
     if not nested.predictions.empty or nested.selections:
         raise AssertionError("empty selection-contract validation produced experiment output")
 
-    manifest = _build_manifest(features, bundle.manifest, snapshots, coverage, retrieved_at)
+    manifest = _build_manifest(
+        features, bundle.manifest, snapshots, coverage, retrieved_at, evaluation_seasons
+    )
     return V2BuildArtifacts(features=features, manifest=manifest)
 
 
@@ -488,9 +503,15 @@ def write_v2_artifacts_atomic(
     manifest_path: Path,
 ) -> None:
     """Validate, publish, and if needed roll back the Ridge-v2 feature/manifest pair."""
-    _validate_artifacts(artifacts)
     feature_path = Path(feature_path)
     manifest_path = Path(manifest_path)
+    for label, path in (("feature", feature_path), ("manifest", manifest_path)):
+        if path.name in PROTECTED_V1_ARTIFACT_NAMES:
+            raise ValueError(
+                f"refusing to write the Ridge-v2 {label} artifact over "
+                f"frozen Ridge-v1 file {path.name!r}"
+            )
+    _validate_artifacts(artifacts)
     if feature_path.resolve() == manifest_path.resolve():
         raise ValueError("Ridge-v2 feature and manifest destinations must differ")
     if feature_path.parent.resolve() != manifest_path.parent.resolve():

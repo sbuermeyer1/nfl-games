@@ -295,7 +295,7 @@ def fake_inputs() -> V2BuildInputs:
 
 @pytest.fixture(scope="module")
 def built():
-    return build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC)
+    return build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
 
 
 def test_builder_preserves_c0_values_dtypes_lines_and_targets_exactly(built):
@@ -385,11 +385,11 @@ def test_builder_fails_closed_when_production_block_team_week_coverage_is_below_
     )
 
     with pytest.raises(ValueError, match=r"C1.*coverage below 0\.9000"):
-        build_v2_artifacts(low_coverage, retrieved_at=FIXED_UTC)
+        build_v2_artifacts(low_coverage, retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
 
 
 def test_fixed_clock_and_semantic_digest_make_build_reproducible(built):
-    rebuilt = build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC)
+    rebuilt = build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
 
     pd.testing.assert_frame_equal(built.features, rebuilt.features)
     assert built.manifest == rebuilt.manifest
@@ -536,3 +536,67 @@ def test_cli_parser_rejects_combined_dry_run_and_write():
 
     with pytest.raises(SystemExit):
         build_v2_dataset._parser().parse_args(["--dry-run", "--write"])
+
+
+def test_atomic_writer_refuses_a_ridge_v1_destination_and_leaves_it_untouched(built, tmp_path):
+    """Nothing in the v2 pipeline may republish a frozen Ridge-v1 artifact."""
+    v1_features = tmp_path / "game_features.parquet"
+    v1_features.write_bytes(b"frozen-v1")
+
+    with pytest.raises(ValueError, match="Ridge-v1"):
+        write_v2_artifacts_atomic(built, v1_features, tmp_path / V2_MANIFEST_PATH.name)
+
+    assert v1_features.read_bytes() == b"frozen-v1"
+
+
+def test_atomic_writer_refuses_a_ridge_v1_manifest_destination(built, tmp_path):
+    """The manifest side of the pair needs the same guard as the feature side."""
+    v1_ledger = tmp_path / "tracker_ledger.parquet"
+    v1_ledger.write_bytes(b"frozen-v1-ledger")
+
+    with pytest.raises(ValueError, match="Ridge-v1"):
+        write_v2_artifacts_atomic(built, tmp_path / V2_FEATURES_PATH.name, v1_ledger)
+
+    assert v1_ledger.read_bytes() == b"frozen-v1-ledger"
+
+
+def test_cli_write_refuses_a_ridge_v1_destination_and_exits_nonzero(built, tmp_path, capsys):
+    from scripts import build_v2_dataset
+
+    inputs = fake_inputs()
+    v1_features = tmp_path / "game_features.parquet"
+    v1_features.write_bytes(b"frozen-v1")
+    loaders = {
+        "load_schedules": lambda *args, **kwargs: inputs.schedules,
+        "load_pbp": lambda *args, **kwargs: inputs.pbp,
+        "load_ngs": lambda *args, **kwargs: inputs.ngs,
+        "load_player_stats": lambda *args, **kwargs: inputs.player_stats,
+        "load_players": lambda *args, **kwargs: inputs.players,
+        "load_rosters_weekly": lambda *args, **kwargs: inputs.rosters,
+        "load_depth_charts": lambda *args, **kwargs: inputs.depth_charts,
+        "load_snap_counts": lambda *args, **kwargs: inputs.snap_counts,
+        "load_pfr_advstats": lambda seasons, stat_type, save=False: inputs.pfr[stat_type],
+        "read_parquet": lambda path: inputs.base_features,
+        "build_v2_artifacts": lambda loaded, retrieved_at: built,
+    }
+
+    result = build_v2_dataset.main(
+        [
+            "--write",
+            "--features",
+            str(v1_features),
+            "--manifest",
+            str(tmp_path / V2_MANIFEST_PATH.name),
+        ],
+        loaders=loaders,
+        retrieved_at=FIXED_UTC,
+    )
+
+    assert result == 1
+    assert v1_features.read_bytes() == b"frozen-v1"
+
+
+def test_builder_fails_when_a_required_evaluation_season_is_absent_from_the_corpus():
+    """A truncated corpus must stop the build, not silently drop the season's gate."""
+    with pytest.raises(ValueError, match=r"C1.*2022"):
+        build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC, evaluation_seasons=(2021, 2022))

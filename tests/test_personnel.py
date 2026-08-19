@@ -3,6 +3,8 @@ import pytest
 
 from nfl_game.ratings.personnel import (
     PERSONNEL_FEATURE_COLS,
+    _prepared_depth,
+    _prepared_rosters,
     normalize_snap_counts,
     personnel_features_for_targets,
     player_id_map,
@@ -198,3 +200,33 @@ def test_pre_2025_roster_ignores_off_week_snapshot_for_week_one_continuity():
     out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
     assert out["off_returning_share"] == pytest.approx(0.75)
     assert out["roster_churn"] == pytest.approx(0.25)
+
+
+def test_absent_roster_dt_column_stays_timezone_aware():
+    """Live rosters_weekly carries no `dt` at all; an absent column must not go tz-naive."""
+    rosters = personnel_inputs()["rosters"].drop(columns=["dt"])
+
+    prepared = _prepared_rosters(rosters)
+
+    assert prepared["dt"].dt.tz is not None
+
+
+def test_absent_depth_chart_dt_column_stays_timezone_aware():
+    """Depth charts only carry `dt` from 2025; pre-2025 loads must not go tz-naive."""
+    depth = personnel_inputs()["depth_charts"].drop(columns=["dt"])
+
+    prepared = _prepared_depth(depth)
+
+    assert prepared["dt"].dt.tz is not None
+
+
+def test_personnel_features_build_when_neither_source_carries_dt():
+    """The cutoff comparison must not raise on the real 2016-2024 source schema."""
+    kwargs = personnel_inputs(targets=[(2025, 1)])
+    kwargs["rosters"] = kwargs["rosters"].drop(columns=["dt"])
+    kwargs["depth_charts"] = kwargs["depth_charts"].drop(columns=["dt"])
+
+    out = personnel_features_for_targets(**kwargs)
+
+    assert sorted(out["team"]) == ["BUF", "MIA"]
+    assert set(PERSONNEL_FEATURE_COLS).issubset(out.columns)

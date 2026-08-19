@@ -67,12 +67,28 @@ def _snapshot(rows: pd.DataFrame, season: int, week: int, team: str, cutoff: pd.
     return eligible[eligible["dt"] == eligible["dt"].max()]
 
 
+def _utc_dt(frame: pd.DataFrame) -> pd.Series:
+    """Coerce `dt` to UTC.
+
+    An ABSENT column is the live case, not a corner case: rosters_weekly never carries
+    `dt` and depth charts only carry it from 2025. `frame.get("dt")` would hand
+    `pd.to_datetime` a None, which returns a scalar NaT and broadcasts a tz-NAIVE column
+    that then cannot be compared to the tz-aware kickoff cutoff.
+    """
+    values = (
+        frame["dt"]
+        if "dt" in frame
+        else pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+    )
+    return pd.to_datetime(values, utc=True, errors="coerce")
+
+
 def _prepared_rosters(rosters: pd.DataFrame) -> pd.DataFrame:
     columns = [*_KEY, "player_id", "dt"]
     if rosters.empty or not set(_KEY + ["gsis_id"]).issubset(rosters):
         return pd.DataFrame(columns=columns)
     out = rosters.copy().rename(columns={"gsis_id": "player_id"})
-    out["dt"] = pd.to_datetime(out.get("dt"), utc=True, errors="coerce")
+    out["dt"] = _utc_dt(out)
     return out[columns].dropna(subset=["player_id"])
 
 
@@ -84,7 +100,7 @@ def _prepared_depth(depth_charts: pd.DataFrame) -> pd.DataFrame:
     if slot is None:
         return pd.DataFrame(columns=columns)
     out = depth_charts.copy().rename(columns={"gsis_id": "player_id", slot: "slot"})
-    out["dt"] = pd.to_datetime(out.get("dt"), utc=True, errors="coerce")
+    out["dt"] = _utc_dt(out)
     return out[columns].dropna(subset=["player_id", "slot"])
 
 
