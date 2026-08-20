@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -293,6 +294,23 @@ def fake_inputs() -> V2BuildInputs:
     )
 
 
+def _cli_loaders(inputs: V2BuildInputs, builder) -> dict[str, object]:
+    """Loader injections for the CLI that return the in-memory fake frames."""
+    return {
+        "load_schedules": lambda *args, **kwargs: inputs.schedules,
+        "load_pbp": lambda *args, **kwargs: inputs.pbp,
+        "load_ngs": lambda *args, **kwargs: inputs.ngs,
+        "load_player_stats": lambda *args, **kwargs: inputs.player_stats,
+        "load_players": lambda *args, **kwargs: inputs.players,
+        "load_rosters_weekly": lambda *args, **kwargs: inputs.rosters,
+        "load_depth_charts": lambda *args, **kwargs: inputs.depth_charts,
+        "load_snap_counts": lambda *args, **kwargs: inputs.snap_counts,
+        "load_pfr_advstats": lambda seasons, stat_type, save=False: inputs.pfr[stat_type],
+        "read_parquet": lambda path: inputs.base_features,
+        "build_v2_artifacts": builder,
+    }
+
+
 @pytest.fixture(scope="module")
 def built():
     return build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
@@ -340,9 +358,25 @@ def test_builder_records_all_sources_coverage_schema_and_semantic_digests(built)
         "base_features",
     }
     assert all(snapshot["schema_sha256"] for snapshot in built.manifest["source_snapshots"])
-    assert all(snapshot["rows"] >= 0 for snapshot in built.manifest["source_snapshots"])
+    inputs = fake_inputs()
+    assert {
+        snapshot["name"]: snapshot["rows"] for snapshot in built.manifest["source_snapshots"]
+    } == {
+        "schedules": len(inputs.schedules),
+        "pbp": len(inputs.pbp),
+        "ngs": len(inputs.ngs),
+        "player_stats": len(inputs.player_stats),
+        "players": len(inputs.players),
+        "rosters": len(inputs.rosters),
+        "depth_charts": len(inputs.depth_charts),
+        "snap_counts": len(inputs.snap_counts),
+        "pfr_pass": len(inputs.pfr["pass"]),
+        "pfr_rush": len(inputs.pfr["rush"]),
+        "pfr_rec": len(inputs.pfr["rec"]),
+        "pfr_def": len(inputs.pfr["def"]),
+        "base_features": len(inputs.base_features),
+    }
     assert built.manifest["block_coverage"]["C5"]["production_eligible"] is False
-    assert built.manifest["block_coverage"]["C5"]["pfr_rec_drop_rate_2025"] == pytest.approx(0.6912)
     assert built.manifest["output"]["features_semantic_sha256"] == semantic_frame_digest(
         built.features
     )
@@ -600,3 +634,45 @@ def test_builder_fails_when_a_required_evaluation_season_is_absent_from_the_corp
     """A truncated corpus must stop the build, not silently drop the season's gate."""
     with pytest.raises(ValueError, match=r"C1.*2022"):
         build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC, evaluation_seasons=(2021, 2022))
+
+
+def test_c5_drop_rate_coverage_is_measured_from_the_build_not_a_frozen_literal(built):
+    """A literal beside computed coverage records a measurement the build never made."""
+    key = "pfr_rec_drop_rate_source_coverage"
+    complete = built.manifest["block_coverage"]["C5"][key]
+
+    inputs = fake_inputs()
+    rec = inputs.pfr["rec"].copy()
+    rec.loc[rec["team"].isin(("MIA", "NE")), ["receiving_drop", "receiving_drop_pct"]] = np.nan
+    degraded = build_v2_artifacts(
+        replace(inputs, pfr={**inputs.pfr, "rec": rec}),
+        retrieved_at=FIXED_UTC,
+        evaluation_seasons=(2021,),
+    ).manifest["block_coverage"]["C5"][key]
+
+    assert complete == {"2020": pytest.approx(1.0)}
+    assert degraded == {"2020": pytest.approx(0.5)}
+
+
+def test_cli_traceback_flag_reports_the_failing_stack(built, tmp_path, capsys):
+    """The bare CLI boundary printed only str(exc); a 30-minute build failed on one line."""
+    from scripts import build_v2_dataset
+
+    inputs = fake_inputs()
+
+    def explode(loaded, retrieved_at):
+        raise ValueError("deliberate build failure")
+
+    loaders = _cli_loaders(inputs, builder=explode)
+
+    quiet = build_v2_dataset.main(["--dry-run"], loaders=loaders, retrieved_at=FIXED_UTC)
+    quiet_err = capsys.readouterr().err
+    loud = build_v2_dataset.main(
+        ["--dry-run", "--traceback"], loaders=loaders, retrieved_at=FIXED_UTC
+    )
+    loud_err = capsys.readouterr().err
+
+    assert quiet == 1 and loud == 1
+    assert "Traceback (most recent call last)" not in quiet_err
+    assert "Traceback (most recent call last)" in loud_err
+    assert "deliberate build failure" in loud_err

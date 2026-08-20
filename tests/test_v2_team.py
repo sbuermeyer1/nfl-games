@@ -148,3 +148,15 @@ def test_future_rows_cannot_change_prior_rating():
     actual = v2_team_ratings(poisoned, [(2024, 4)], 4, 16, 0.6)
 
     pd.testing.assert_frame_equal(base, actual)
+
+
+def test_team_game_v2_fails_closed_when_no_score_differential_column_exists():
+    """Neither alias present means a broken feed, not a game with no score context.
+
+    Failing open silently produced an all-NaN neutral mask, so `neutral_epa` became NaN
+    for every team-game while nothing raised.
+    """
+    pbp = pbp_fixture().drop(columns=["posteam_score_differential"])
+
+    with pytest.raises(ValueError, match="score differential"):
+        team_game_v2(pbp)

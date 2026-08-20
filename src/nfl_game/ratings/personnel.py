@@ -55,10 +55,37 @@ def _targets_from_schedule(schedules: pd.DataFrame, targets: list[tuple[int, int
     return out[[*_KEY, "cutoff"]].sort_values(_KEY).reset_index(drop=True)
 
 
-def _snapshot(rows: pd.DataFrame, season: int, week: int, team: str, cutoff: pd.Timestamp) -> pd.DataFrame:
+def _timestamped_seasons(rows: pd.DataFrame) -> frozenset[int]:
+    """Return the seasons this feed addresses by timestamp rather than by week label.
+
+    The feeds differ in SHAPE, not just in schema, and the shape is what the rule turns
+    on. Every season of rosters_weekly and every pre-2025 depth chart is week-labelled
+    and carries no `dt`; the 2025-era depth feed carries `dt` and no week label at all.
+    Keying the rule to `season >= 2025` therefore empties every 2025 roster snapshot,
+    and because the resulting zeros are non-null the block still reports 1.000000
+    coverage - completeness, not correctness.
+    """
+    if rows.empty or "dt" not in rows or "week" not in rows:
+        return frozenset()
+    labelled = rows.groupby(rows["season"], dropna=True).agg(
+        has_dt=("dt", lambda values: bool(values.notna().any())),
+        has_week=("week", lambda values: bool(values.notna().any())),
+    )
+    eligible = labelled[labelled["has_dt"] & ~labelled["has_week"]]
+    return frozenset(int(season) for season in eligible.index)
+
+
+def _snapshot(
+    rows: pd.DataFrame,
+    season: int,
+    week: int,
+    team: str,
+    cutoff: pd.Timestamp,
+    timestamped: bool,
+) -> pd.DataFrame:
     """Select the current roster snapshot under the source-era availability rule."""
     team_rows = rows[(rows["season"] == season) & rows["team"].eq(team)]
-    if season < 2025:
+    if not timestamped:
         labeled = team_rows[team_rows["week"] == week]
         return labeled[labeled["dt"].isna() | (labeled["dt"] <= cutoff)]
     eligible = team_rows[team_rows["dt"].notna() & (team_rows["dt"] <= cutoff)]
@@ -155,9 +182,18 @@ def personnel_features_for_targets(
     raw = raw.merge(mapping, on="pfr_player_id", how="left")
     roster_rows = _prepared_rosters(rosters)
     depth = _prepared_depth(depth_charts)
+    roster_timestamped = _timestamped_seasons(roster_rows)
     results = []
     for target in games.itertuples(index=False):
-        roster = set(_snapshot(roster_rows, target.season, target.week, target.team, target.cutoff)["player_id"])
+        snapshot = _snapshot(
+            roster_rows,
+            target.season,
+            target.week,
+            target.team,
+            target.cutoff,
+            target.season in roster_timestamped,
+        )
+        roster = set(snapshot["player_id"])
         if target.week == 1:
             history = raw[(raw["season"] == target.season - 1) & raw["team"].eq(target.team)]
         else:

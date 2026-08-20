@@ -230,3 +230,65 @@ def test_personnel_features_build_when_neither_source_carries_dt():
 
     assert sorted(out["team"]) == ["BUF", "MIA"]
     assert set(PERSONNEL_FEATURE_COLS).issubset(out.columns)
+
+
+def test_2025_roster_without_dt_column_uses_the_week_labelled_snapshot():
+    """rosters_weekly has never carried `dt`, so a season-keyed timestamp rule empties it.
+
+    Measured live: every 2025 roster snapshot returned 0 rows from a 46,849-row feed,
+    which drove week-one returning shares to 0.0 and churn to 1.0 for every team while
+    C4 coverage still read 1.000000.
+    """
+    inputs = personnel_inputs(targets=[(2025, 1)])
+    inputs["rosters"] = inputs["rosters"].drop(columns=["dt"])
+
+    out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+
+    assert out["off_returning_share"] == pytest.approx(0.75)
+    assert out["roster_churn"] == pytest.approx(0.25)
+
+
+def test_unlabelled_timestamped_season_uses_latest_pre_kickoff_snapshot():
+    """A feed with timestamps and no week label is addressed by its latest snapshot.
+
+    This is the live shape of the 2025-era depth-chart feed: 554,215 rows carrying `dt`
+    with `season` and `week` both null.
+    """
+    inputs = personnel_inputs(targets=[(2025, 1)])
+    inputs["rosters"] = pd.DataFrame(
+        [
+            {"season": 2025, "week": None, "team": "BUF", "gsis_id": "gsis-a", "dt": "2025-09-06T12:00:00Z"},
+            {"season": 2025, "week": None, "team": "BUF", "gsis_id": "gsis-b", "dt": "2025-09-06T12:00:00Z"},
+            {"season": 2025, "week": None, "team": "BUF", "gsis_id": "gsis-d", "dt": "2025-09-06T12:00:00Z"},
+            {"season": 2025, "week": None, "team": "BUF", "gsis_id": "gsis-a", "dt": "2025-09-07T00:00:00Z"},
+        ]
+    )
+
+    out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+
+    assert out["off_returning_share"] == pytest.approx(0.5)
+    assert out["roster_churn"] == pytest.approx(0.5)
+
+
+def test_roster_availability_rule_is_decided_per_season_not_per_frame():
+    """A later timestamped season must not impose its rule on an untimestamped one."""
+    inputs = personnel_inputs(targets=[(2024, 1)])
+    inputs["schedules"] = pd.DataFrame(
+        [{"season": 2024, "week": 1, "home_team": "BUF", "away_team": "MIA", "kickoff_at": "2024-09-08T17:00:00Z"}]
+    )
+    inputs["snaps"] = pd.DataFrame(
+        [
+            {"season": 2023, "week": 18, "team": "BUF", "pfr_player_id": "pfr-a", "offense_snaps": 75, "defense_snaps": 0},
+            {"season": 2023, "week": 18, "team": "BUF", "pfr_player_id": "pfr-c", "offense_snaps": 25, "defense_snaps": 0},
+        ]
+    )
+    inputs["rosters"] = pd.DataFrame(
+        [
+            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-a", "dt": None},
+            {"season": 2025, "week": None, "team": "BUF", "gsis_id": "gsis-b", "dt": "2025-09-06T12:00:00Z"},
+        ]
+    )
+
+    out = personnel_features_for_targets(**inputs).set_index("team").loc["BUF"]
+
+    assert out["off_returning_share"] == pytest.approx(0.75)

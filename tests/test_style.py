@@ -265,3 +265,11 @@ def test_tied_fallback_clocks_are_independent_of_input_order():
         forward[["pace_seconds", "starting_field_position"]],
         reversed_rows[["pace_seconds", "starting_field_position"]],
     )
+
+
+def test_team_game_style_fails_closed_when_no_score_differential_column_exists():
+    """The mirror of the v2 team-block guard: an absent alias must raise, not go NaN."""
+    pbp = style_pbp().drop(columns=["posteam_score_differential"])
+
+    with pytest.raises(ValueError, match="score differential"):
+        team_game_style(pbp)

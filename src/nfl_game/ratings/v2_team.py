@@ -22,6 +22,25 @@ _KEY_COLUMNS = ["game_id", "season", "week", "team", "opponent", "is_home"]
 _TEAM_GAME_COLUMNS = _KEY_COLUMNS + list(V2_RATING_TARGETS)
 
 
+_SCORE_DIFFERENTIAL_COLUMNS = ("score_differential", "posteam_score_differential")
+
+
+def _score_differential_column(plays: pd.DataFrame) -> str:
+    """Resolve the score-differential alias, failing closed when the feed has neither.
+
+    Every neutral-situation feature is defined by this column. Defaulting it to NaN
+    turns a schema break into an empty neutral mask, which reaches the caller as a
+    silently missing feature rather than as an error.
+    """
+    for column in _SCORE_DIFFERENTIAL_COLUMNS:
+        if column in plays:
+            return column
+    raise ValueError(
+        "play-by-play carries no score differential column; expected one of "
+        f"{_SCORE_DIFFERENTIAL_COLUMNS}"
+    )
+
+
 def team_game_v2(pbp: pd.DataFrame) -> pd.DataFrame:
     """Aggregate regular-season scrimmage plays into one offensive row per game/team."""
     plays = pbp[
@@ -38,19 +57,8 @@ def team_game_v2(pbp: pd.DataFrame) -> pd.DataFrame:
     plays["is_sack"] = plays["sack"] == 1
     plays["is_pass_attempt"] = plays["is_pass"] & ~plays["is_sack"]
     plays["is_early_down"] = plays["down"].isin((1, 2))
-    score_column = next(
-        (
-            column
-            for column in ("score_differential", "posteam_score_differential")
-            if column in plays
-        ),
-        None,
-    )
-    score_differential = (
-        pd.to_numeric(plays[score_column], errors="coerce")
-        if score_column is not None
-        else pd.Series(np.nan, index=plays.index, dtype=float)
-    )
+    score_column = _score_differential_column(plays)
+    score_differential = pd.to_numeric(plays[score_column], errors="coerce")
     plays["is_neutral"] = plays["qtr"].between(1, 3) & score_differential.abs().le(8)
     dropbacks = plays["qb_dropback"] if "qb_dropback" in plays else plays["pass"]
     plays["is_dropback"] = dropbacks == 1

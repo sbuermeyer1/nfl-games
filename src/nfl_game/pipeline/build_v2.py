@@ -230,6 +230,27 @@ def _target_team_weeks(base: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _source_column_coverage(team_weeks: pd.DataFrame, column: str) -> dict[str, float]:
+    """Measure one raw source column's per-season completeness before any trailing fill.
+
+    Taken on the SOURCE team-weeks rather than on the built block: every block column is
+    league-filled, so a block-level reading is 1.000000 however sparse the feed is. This
+    is the figure Task 8 recorded as 0.6912 for 2025, and it is computed here because a
+    hardcoded literal beside computed coverage stamps the hashed manifest with a number
+    the build never took.
+    """
+    if column not in team_weeks.columns:
+        raise ValueError(f"source frame missing reported coverage column: {column}")
+    values = pd.to_numeric(team_weeks[column], errors="coerce")
+    finite = values.notna() & np.isfinite(values.to_numpy(dtype=float))
+    seasons = pd.to_numeric(team_weeks["season"], errors="coerce")
+    reported: dict[str, float] = {}
+    for season in sorted(seasons.dropna().unique()):
+        mask = seasons.eq(season)
+        reported[str(int(season))] = float(finite.loc[mask].mean())
+    return reported
+
+
 def _block_coverage(
     name: str,
     block: pd.DataFrame,
@@ -339,7 +360,9 @@ def _assemble_blocks(
             evaluation_seasons=evaluation_seasons,
         ),
     }
-    coverage["C5"]["pfr_rec_drop_rate_2025"] = 0.6912  # type: ignore[index]
+    coverage["C5"]["pfr_rec_drop_rate_source_coverage"] = _source_column_coverage(  # type: ignore[index]
+        pfr_team_weeks, "pfr_rec_drop_rate"
+    )
     return ratings_by_setting, blocks, coverage
 
 

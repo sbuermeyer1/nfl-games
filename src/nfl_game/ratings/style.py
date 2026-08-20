@@ -15,6 +15,7 @@ STYLE_FEATURE_COLS = (
     "style_imputed",
 )
 TURNOVER_PRIOR_PLAYS = 200
+_SCORE_DIFFERENTIAL_COLUMNS = ("score_differential", "posteam_score_differential")
 
 _KEY = ["game_id", "season", "week", "team"]
 _GAME_COLS = _KEY + [
@@ -72,6 +73,17 @@ def _ordered_drive(drive: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _score_differential_column(rows: pd.DataFrame) -> str:
+    """Mirror of the v2 team-block resolver: an absent alias is a broken feed."""
+    for column in _SCORE_DIFFERENTIAL_COLUMNS:
+        if column in rows:
+            return column
+    raise ValueError(
+        "play-by-play carries no score differential column; expected one of "
+        f"{_SCORE_DIFFERENTIAL_COLUMNS}"
+    )
+
+
 def team_game_style(pbp: pd.DataFrame) -> pd.DataFrame:
     """Reduce regular-season play-by-play to one offensive style row per team-game."""
     if pbp.empty:
@@ -99,15 +111,7 @@ def team_game_style(pbp: pd.DataFrame) -> pd.DataFrame:
     rows["_yardline"] = _numeric(rows, "yardline_100")
     rows["_seconds"] = _numeric(rows, "game_seconds_remaining")
     rows["_qtr"] = _numeric(rows, "qtr")
-    score_column = next(
-        (
-            column
-            for column in ("score_differential", "posteam_score_differential")
-            if column in rows
-        ),
-        "score_differential",
-    )
-    rows["_score_diff"] = _numeric(rows, score_column)
+    rows["_score_diff"] = _numeric(rows, _score_differential_column(rows))
 
     output = []
     for key, game in rows.groupby(["game_id", "season", "week", "posteam"], dropna=True):

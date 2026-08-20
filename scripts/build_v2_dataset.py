@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +58,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--features", type=Path, default=V2_FEATURES_PATH)
     parser.add_argument("--manifest", type=Path, default=V2_MANIFEST_PATH)
+    parser.add_argument(
+        "--traceback",
+        action="store_true",
+        help="print the full stack for a failed build, not just its message",
+    )
     return parser
 
 
@@ -112,10 +118,11 @@ def _print_report(artifacts: V2BuildArtifacts, args) -> None:
         for season, value in report["seasons"].items():
             print(f"block {block} coverage season={season} value={value:.6f}")
         if block == "C5":
-            print(
-                "block C5 research-only production_eligible=false "
-                f"pfr_rec_drop_rate_2025={report['pfr_rec_drop_rate_2025']:.4f}"
-            )
+            print("block C5 research-only production_eligible=false")
+            for season, value in report["pfr_rec_drop_rate_source_coverage"].items():
+                print(
+                    f"block C5 pfr_rec_drop_rate source coverage season={season} value={value:.6f}"
+                )
     output = manifest["output"]
     print(f"output rows={output['rows']} columns={output['columns']}")
     print(f"output schema_sha256={output['schema_sha256']}")
@@ -143,6 +150,8 @@ def main(argv=None, loaders=None, retrieved_at=None) -> int:
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI boundary converts failures to exit status
         print(f"ridge-v2 build failed: {exc}", file=sys.stderr)
+        if args.traceback:
+            traceback.print_exc(file=sys.stderr)
         return 1
 
 
