@@ -3,7 +3,6 @@ import pytest
 
 from nfl_game.ratings.personnel import (
     PERSONNEL_FEATURE_COLS,
-    _prepared_depth,
     _prepared_rosters,
     normalize_snap_counts,
     personnel_features_for_targets,
@@ -35,10 +34,10 @@ def personnel_inputs(targets=None):
         ),
         "depth_charts": pd.DataFrame(
             [
-                {"season": 2025, "week": 2, "team": "BUF", "gsis_id": "gsis-a", "depth_chart_position": "QB1", "dt": "2025-09-08T12:00:00Z"},
-                {"season": 2025, "week": 2, "team": "BUF", "gsis_id": "gsis-b", "depth_chart_position": "RB1", "dt": "2025-09-08T12:00:00Z"},
-                {"season": 2025, "week": 2, "team": "BUF", "gsis_id": "gsis-d", "depth_chart_position": "QB1", "dt": "2025-09-12T12:00:00Z"},
-                {"season": 2025, "week": 2, "team": "BUF", "gsis_id": "gsis-b", "depth_chart_position": "RB1", "dt": "2025-09-12T12:00:00Z"},
+                {"team": "BUF", "gsis_id": "gsis-a", "pos_abb": "QB", "pos_rank": 1.0, "dt": "2025-09-05T12:00:00Z"},
+                {"team": "BUF", "gsis_id": "gsis-b", "pos_abb": "RB", "pos_rank": 1.0, "dt": "2025-09-05T12:00:00Z"},
+                {"team": "BUF", "gsis_id": "gsis-d", "pos_abb": "QB", "pos_rank": 1.0, "dt": "2025-09-12T12:00:00Z"},
+                {"team": "BUF", "gsis_id": "gsis-b", "pos_abb": "RB", "pos_rank": 1.0, "dt": "2025-09-12T12:00:00Z"},
             ]
         ),
         "players": pd.DataFrame(
@@ -81,9 +80,10 @@ def test_snap_hhi_is_sum_of_squared_player_shares():
     assert out.loc["BUF", "off_snap_hhi"] == pytest.approx(0.5**2 + 0.3**2 + 0.2**2)
 
 
-def test_depth_chart_change_compares_player_ids_in_each_slot():
+def test_depth_chart_change_is_starter_set_turnover_over_seven_days():
+    """QB1 moved gsis-a -> gsis-d a week before kickoff; RB1 held."""
     out = personnel_features_for_targets(**personnel_inputs()).set_index("team")
-    assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(0.5)
+    assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(2 / 3)
 
 
 def test_low_identifier_coverage_is_imputed_without_counting_unmapped_as_departure():
@@ -106,16 +106,19 @@ def test_normalize_snap_counts_preserves_only_mapped_gsis_identity():
     ]
 
 
-def test_pre_2025_depth_snapshot_after_cutoff_does_not_change_chart():
+def test_pre_2025_depth_change_compares_the_two_most_recent_weekly_charts():
+    """The older feed is week-labelled with no timestamp, so week W-1 is the anchor."""
     inputs = personnel_inputs(targets=[(2024, 2)])
     inputs["depth_charts"] = pd.DataFrame(
         [
-            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-a", "depth_chart_position": "QB1", "dt": "2024-09-08T12:00:00Z"},
-            {"season": 2024, "week": 2, "team": "BUF", "gsis_id": "gsis-d", "depth_chart_position": "QB1", "dt": "2024-09-16T12:00:00Z"},
+            {"season": 2024, "week": 1, "club_code": "BUF", "gsis_id": "gsis-a", "position": "QB", "depth_team": "1"},
+            {"season": 2024, "week": 1, "club_code": "BUF", "gsis_id": "gsis-b", "position": "RB", "depth_team": "1"},
+            {"season": 2024, "week": 2, "club_code": "BUF", "gsis_id": "gsis-d", "position": "QB", "depth_team": "1"},
+            {"season": 2024, "week": 2, "club_code": "BUF", "gsis_id": "gsis-b", "position": "RB", "depth_team": "1"},
         ]
     )
     out = personnel_features_for_targets(**inputs).set_index("team")
-    assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(0.0)
+    assert out.loc["BUF", "depth_chart_change_rate"] == pytest.approx(2 / 3)
 
 
 def test_zero_mapped_prior_offense_is_neutral_churn_not_departure():
@@ -149,13 +152,15 @@ def test_identifier_coverage_combines_offense_and_defense_snap_mass():
     assert out["personnel_imputed"] == 0
 
 
-def test_pre_2025_depth_uses_only_exact_target_week_snapshots():
+def test_pre_2025_depth_change_excludes_backups_from_the_starter_set():
+    """Only rank 1 counts; the older feed ranks {1,2,3} and the newer one 1-12."""
     inputs = personnel_inputs(targets=[(2024, 2)])
     inputs["depth_charts"] = pd.DataFrame(
         [
-            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-a", "depth_chart_position": "QB1", "dt": "2024-09-08T10:00:00Z"},
-            {"season": 2024, "week": 1, "team": "BUF", "gsis_id": "gsis-d", "depth_chart_position": "QB1", "dt": "2024-09-09T10:00:00Z"},
-            {"season": 2024, "week": 2, "team": "BUF", "gsis_id": "gsis-b", "depth_chart_position": "QB1", "dt": "2024-09-14T10:00:00Z"},
+            {"season": 2024, "week": 1, "club_code": "BUF", "gsis_id": "gsis-a", "position": "QB", "depth_team": "1"},
+            {"season": 2024, "week": 1, "club_code": "BUF", "gsis_id": "gsis-d", "position": "QB", "depth_team": "2"},
+            {"season": 2024, "week": 2, "club_code": "BUF", "gsis_id": "gsis-a", "position": "QB", "depth_team": "1"},
+            {"season": 2024, "week": 2, "club_code": "BUF", "gsis_id": "gsis-b", "position": "QB", "depth_team": "2"},
         ]
     )
     out = personnel_features_for_targets(**inputs).set_index("team")
@@ -207,15 +212,6 @@ def test_absent_roster_dt_column_stays_timezone_aware():
     rosters = personnel_inputs()["rosters"].drop(columns=["dt"])
 
     prepared = _prepared_rosters(rosters)
-
-    assert prepared["dt"].dt.tz is not None
-
-
-def test_absent_depth_chart_dt_column_stays_timezone_aware():
-    """Depth charts only carry `dt` from 2025; pre-2025 loads must not go tz-naive."""
-    depth = personnel_inputs()["depth_charts"].drop(columns=["dt"])
-
-    prepared = _prepared_depth(depth)
 
     assert prepared["dt"].dt.tz is not None
 

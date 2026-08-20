@@ -172,15 +172,16 @@ def _depth_charts() -> pd.DataFrame:
         [
             {
                 "season": 2021,
-                "week": 1,
-                "team": team,
+                "week": week,
+                "club_code": team,
                 "position": "QB",
-                "depth_chart_position": 1,
+                "depth_team": "1",
                 "player_id": f"qb-{team.lower()}",
                 "gsis_id": f"qb-{team.lower()}",
                 "dt": pd.NaT,
             }
             for team in TEAMS
+            for week in (1,)
         ]
     )
 

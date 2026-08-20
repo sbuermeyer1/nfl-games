@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from nfl_game.ratings.depth import chart_as_of, normalize_depth_charts
+
 QB_FEATURE_COLS = (
     "qb_epa_per_db",
     "qb_cpoe",
@@ -69,34 +71,22 @@ def qb_week_stats(player_stats: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_depth_chart_history(depth_charts: pd.DataFrame, schedules: pd.DataFrame) -> pd.DataFrame:
-    """Normalize QB depth rows while preserving their historical availability rule.
+    """Return the quarterback rows of the canonical depth-chart frame.
 
-    The older weekly source is keyed by its assigned season/week.  The point-in-time
-    source from 2025 onward is keyed by its UTC snapshot timestamp.
+    Normalization is NOT done here. The feed arrives as two disjoint schemas and a
+    second, partial normalizer is precisely how this path came to see nothing at all:
+    every pre-2025 row was dropped for a null `team` (its identity is in `club_code`),
+    and the rows that survived carried a null `season`, which no era branch could match.
     """
     columns = ["season", "week", "team", "player_id", "rank", "dt"]
     if depth_charts.empty:
         return pd.DataFrame(columns=columns)
-    rows = depth_charts.copy()
-    position = next((name for name in ("position", "position_group") if name in rows), None)
-    if position is not None:
-        rows = rows[rows[position].isna() | rows[position].eq("QB")]
-    rank_columns = [
-        name
-        for name in ("rank", "depth_chart_position", "depth_chart_rank", "depth_chart_order", "depth")
-        if name in rows
-    ]
-    if not rank_columns:
-        rows["rank"] = 1
-    else:
-        numeric_ranks = rows[rank_columns].apply(pd.to_numeric, errors="coerce")
-        rows["rank"] = numeric_ranks.bfill(axis=1).iloc[:, 0]
-    if "dt" not in rows:
-        rows["dt"] = pd.NaT
-    rows["dt"] = pd.to_datetime(rows["dt"], utc=True, errors="coerce")
-    for name in ("season", "week"):
-        rows[name] = pd.to_numeric(rows[name], errors="coerce").astype("Int64")
-    return rows[columns].dropna(subset=["team", "player_id", "rank"]).reset_index(drop=True)
+    normalized = normalize_depth_charts(depth_charts)
+    position = normalized["position"].astype("string").str.upper()
+    # A null position means the frame was already normalized and filtered, so its rows
+    # are quarterbacks already. Both live eras DO carry a position, so this tolerance
+    # never re-opens the 2025-era hole where every position was kept.
+    return normalized.loc[position.isna() | position.eq("QB"), columns].reset_index(drop=True)
 
 
 def _prior(rows: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
@@ -136,18 +126,11 @@ def _rates(rows: pd.DataFrame) -> dict[str, float]:
 
 
 def _starter(depth: pd.DataFrame, season: int, week: int, team: str, cutoff: pd.Timestamp) -> str | None:
-    team_rows = depth[depth["team"].eq(team)]
-    if season >= 2025:
-        eligible = team_rows[(team_rows["season"] == season) & team_rows["dt"].notna() & (team_rows["dt"] <= cutoff)]
-        if not eligible.empty:
-            snapshot = eligible[eligible["dt"] == eligible["dt"].max()]
-            first = snapshot.sort_values(["rank", "player_id"]).iloc[0]
-            return str(first["player_id"])
-    else:
-        eligible = team_rows[(team_rows["season"] == season) & (team_rows["week"] == week)]
-        if not eligible.empty:
-            return str(eligible.sort_values(["rank", "player_id"]).iloc[0]["player_id"])
-    return None
+    """Return the expected starting quarterback under this team's era availability rule."""
+    chart = chart_as_of(depth, team, season, week, cutoff)
+    if chart.empty:
+        return None
+    return str(chart.sort_values(["rank", "player_id"]).iloc[0]["player_id"])
 
 
 def qb_features_for_targets(

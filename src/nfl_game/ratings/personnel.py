@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from nfl_game.ratings.depth import depth_change_rate, normalize_depth_charts
+
 PERSONNEL_FEATURE_COLS = (
     "off_returning_share", "def_returning_share", "off_snap_hhi", "def_snap_hhi",
     "depth_chart_change_rate", "roster_churn", "id_coverage", "personnel_imputed",
@@ -119,36 +121,6 @@ def _prepared_rosters(rosters: pd.DataFrame) -> pd.DataFrame:
     return out[columns].dropna(subset=["player_id"])
 
 
-def _prepared_depth(depth_charts: pd.DataFrame) -> pd.DataFrame:
-    columns = [*_KEY, "player_id", "slot", "dt"]
-    if depth_charts.empty or not set(_KEY + ["gsis_id"]).issubset(depth_charts):
-        return pd.DataFrame(columns=columns)
-    slot = next((name for name in ("depth_chart_position", "position", "slot") if name in depth_charts), None)
-    if slot is None:
-        return pd.DataFrame(columns=columns)
-    out = depth_charts.copy().rename(columns={"gsis_id": "player_id", slot: "slot"})
-    out["dt"] = _utc_dt(out)
-    return out[columns].dropna(subset=["player_id", "slot"])
-
-
-def _depth_change(depth: pd.DataFrame, season: int, week: int, team: str, cutoff: pd.Timestamp) -> float:
-    rows = depth[(depth["season"] == season) & depth["team"].eq(team)]
-    if season < 2025:
-        rows = rows[(rows["week"] == week) & (rows["dt"].isna() | (rows["dt"] <= cutoff))]
-        moments = sorted(rows["dt"].dropna().unique())[-2:]
-        snapshots = [rows[rows["dt"] == moment] for moment in moments]
-    else:
-        rows = rows[rows["dt"].notna() & (rows["dt"] <= cutoff)]
-        moments = sorted(rows["dt"].unique())[-2:]
-        snapshots = [rows[rows["dt"] == moment] for moment in moments]
-    if len(snapshots) < 2:
-        return 0.0
-    prior = snapshots[0].drop_duplicates("slot").set_index("slot")["player_id"]
-    current = snapshots[1].drop_duplicates("slot").set_index("slot")["player_id"]
-    slots = prior.index.union(current.index)
-    return float(sum(prior.get(slot) != current.get(slot) for slot in slots) / len(slots)) if len(slots) else 0.0
-
-
 def _snap_features(rows: pd.DataFrame, unit: str, roster: set[str]) -> tuple[float, float, float]:
     total = float(rows[unit].sum())
     mapped = rows.dropna(subset=["player_id"])
@@ -181,7 +153,7 @@ def personnel_features_for_targets(
     mapping = player_id_map(players)
     raw = raw.merge(mapping, on="pfr_player_id", how="left")
     roster_rows = _prepared_rosters(rosters)
-    depth = _prepared_depth(depth_charts)
+    depth = normalize_depth_charts(depth_charts)
     roster_timestamped = _timestamped_seasons(roster_rows)
     results = []
     for target in games.itertuples(index=False):
@@ -209,7 +181,9 @@ def personnel_features_for_targets(
             "def_returning_share": def_returning if target.week == 1 else 0.0,
             "off_snap_hhi": 0.0 if target.week == 1 else off_hhi,
             "def_snap_hhi": 0.0 if target.week == 1 else def_hhi,
-            "depth_chart_change_rate": _depth_change(depth, target.season, target.week, target.team, target.cutoff),
+            "depth_chart_change_rate": depth_change_rate(
+                depth, target.team, target.season, target.week, target.cutoff
+            ),
             "roster_churn": 1.0 - off_returning if target.week == 1 and history["offense_snaps"].sum() and off_coverage > 0 else 0.0,
             "id_coverage": coverage,
             "personnel_imputed": int(coverage < 0.9),
