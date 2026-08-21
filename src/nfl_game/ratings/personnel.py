@@ -6,7 +6,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from nfl_game.ratings.depth import depth_change_rate, normalize_depth_charts
+from nfl_game.ratings.depth import (
+    depth_change_rate,
+    empty_like,
+    group_by_team,
+    normalize_depth_charts,
+)
 
 PERSONNEL_FEATURE_COLS = (
     "off_returning_share", "def_returning_share", "off_snap_hhi", "def_snap_hhi",
@@ -154,6 +159,8 @@ def personnel_features_for_targets(
     raw = raw.merge(mapping, on="pfr_player_id", how="left")
     roster_rows = _prepared_rosters(rosters)
     depth = normalize_depth_charts(depth_charts)
+    depth_by_team = group_by_team(depth)
+    no_depth = empty_like(depth)
     roster_timestamped = _timestamped_seasons(roster_rows)
     results = []
     for target in games.itertuples(index=False):
@@ -182,7 +189,11 @@ def personnel_features_for_targets(
             "off_snap_hhi": 0.0 if target.week == 1 else off_hhi,
             "def_snap_hhi": 0.0 if target.week == 1 else def_hhi,
             "depth_chart_change_rate": depth_change_rate(
-                depth, target.team, target.season, target.week, target.cutoff
+                depth_by_team.get(target.team, no_depth),
+                target.team,
+                target.season,
+                target.week,
+                target.cutoff,
             ),
             "roster_churn": 1.0 - off_returning if target.week == 1 and history["offense_snaps"].sum() and off_coverage > 0 else 0.0,
             "id_coverage": coverage,

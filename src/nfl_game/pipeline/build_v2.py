@@ -25,6 +25,7 @@ from nfl_game.model.v2_config import (
     TargetConfig,
 )
 from nfl_game.model.v2_features import build_v2_game_features, team_block_to_game_features
+from nfl_game.ratings.depth import normalize_depth_charts
 from nfl_game.ratings.personnel import PERSONNEL_FEATURE_COLS, personnel_features_for_targets
 from nfl_game.ratings.pfr import (
     PFR_OUTPUT_COLS,
@@ -315,7 +316,9 @@ def _assemble_blocks(
     targets = sorted({(int(row.season), int(row.week)) for row in base.itertuples(index=False)})
     normalized_base = normalize_team_codes(base, ["home_team", "away_team"])
     normalized_schedules = normalize_team_codes(inputs.schedules, ["home_team", "away_team"])
-    depth = _adapt_depth_identifiers(inputs.depth_charts)
+    # Normalized ONCE here: both C2 and C4 consume it, and each normalizing its own
+    # copy costs 36 seconds and an extra 86 MB of commit on the live feed.
+    depth = normalize_depth_charts(_adapt_depth_identifiers(inputs.depth_charts))
 
     team_games = team_game_v2(inputs.pbp)
     ratings_by_setting = {

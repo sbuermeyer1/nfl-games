@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from nfl_game.ratings.depth import chart_as_of, normalize_depth_charts
+from nfl_game.ratings.depth import (
+    chart_as_of,
+    empty_like,
+    group_by_team,
+    normalize_depth_charts,
+)
 
 QB_FEATURE_COLS = (
     "qb_epa_per_db",
@@ -146,6 +151,8 @@ def qb_features_for_targets(
         return pd.DataFrame(columns=columns)
     weeks = qb_weeks.copy() if not qb_weeks.empty else pd.DataFrame(columns=qb_week_stats(pd.DataFrame()).columns)
     depth = normalize_depth_chart_history(depth_history, schedules)
+    depth_by_team = group_by_team(depth)
+    no_depth = empty_like(depth)
     results = []
     for row in games.itertuples(index=False):
         prior = _prior(weeks, int(row.season), int(row.week)) if not weeks.empty else weeks
@@ -156,7 +163,13 @@ def qb_features_for_targets(
             latest = recent_team[["season", "week"]].drop_duplicates().sort_values(["season", "week"]).iloc[-1]
             latest_rows = recent_team[(recent_team["season"] == latest["season"]) & (recent_team["week"] == latest["week"])]
             recent_starter = str(latest_rows.sort_values(["dropbacks", "player_id"], ascending=[False, True]).iloc[0]["player_id"])
-        expected = _starter(depth, int(row.season), int(row.week), row.team, row.cutoff)
+        expected = _starter(
+            depth_by_team.get(row.team, no_depth),
+            int(row.season),
+            int(row.week),
+            row.team,
+            row.cutoff,
+        )
         uncertain = int(expected is None)
         if expected is None:
             expected = recent_starter
