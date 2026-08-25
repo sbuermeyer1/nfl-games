@@ -400,8 +400,27 @@ def _restore_exact_c0(assembled: pd.DataFrame, base: pd.DataFrame) -> pd.DataFra
     return out
 
 
-def _manifest_without_own_digest(manifest: Mapping[str, object]) -> dict[str, object]:
+def _snapshots_without_clock(
+    snapshots: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    return [
+        {key: value for key, value in snapshot.items() if key != "retrieved_at"}
+        for snapshot in snapshots
+    ]
+
+
+def _manifest_semantic_payload(manifest: Mapping[str, object]) -> dict[str, object]:
+    """Reduce the manifest to what a rebuild from identical inputs must reproduce.
+
+    Drops the build clock along with the digest's own field: `build_timestamp` and each
+    snapshot's `retrieved_at` move on every run by construction, so hashing them makes the
+    digest a build identifier rather than a semantic one.
+    """
     payload = json.loads(json.dumps(manifest))
+    payload.pop("build_timestamp", None)
+    snapshots = payload.get("source_snapshots")
+    if isinstance(snapshots, list):
+        payload["source_snapshots"] = _snapshots_without_clock(snapshots)
     output = payload.get("output")
     if isinstance(output, dict):
         output.pop("manifest_semantic_sha256", None)
@@ -425,7 +444,7 @@ def _build_manifest(
         "evaluation_seasons": list(evaluation_seasons),
         "feature_manifest": feature_manifest.to_dict(),
         "source_snapshots": snapshots,
-        "source_manifest_sha256": _semantic_json_digest(snapshots),
+        "source_manifest_sha256": _semantic_json_digest(_snapshots_without_clock(snapshots)),
         "source_row_counts": {snapshot.name: snapshot.rows for snapshot in source_snapshots},
         "block_coverage": dict(coverage),
         "selection_contract_valid": True,
@@ -437,7 +456,7 @@ def _build_manifest(
         },
     }
     payload["output"]["manifest_semantic_sha256"] = _semantic_json_digest(  # type: ignore[index]
-        _manifest_without_own_digest(payload)
+        _manifest_semantic_payload(payload)
     )
     return payload
 
@@ -493,7 +512,7 @@ def _validate_artifacts(artifacts: V2BuildArtifacts) -> None:
         raise ValueError("Ridge-v2 feature semantic digest mismatch")
     if output["schema_sha256"] != schema_fingerprint(features):
         raise ValueError("Ridge-v2 feature schema digest mismatch")
-    expected_manifest_digest = _semantic_json_digest(_manifest_without_own_digest(manifest))
+    expected_manifest_digest = _semantic_json_digest(_manifest_semantic_payload(manifest))
     if output["manifest_semantic_sha256"] != expected_manifest_digest:
         raise ValueError("Ridge-v2 manifest semantic digest mismatch")
 

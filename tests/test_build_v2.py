@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -428,6 +428,55 @@ def test_fixed_clock_and_semantic_digest_make_build_reproducible(built):
 
     pd.testing.assert_frame_equal(built.features, rebuilt.features)
     assert built.manifest == rebuilt.manifest
+
+
+def _manifest_without_clock_fields(manifest: dict) -> dict:
+    """Strip every clock-derived leaf, computed independently of the production helper."""
+    payload = copy.deepcopy(manifest)
+    payload.pop("build_timestamp", None)
+    for snapshot in payload.get("source_snapshots", []):
+        snapshot.pop("retrieved_at", None)
+    return payload
+
+
+def test_semantic_manifest_digests_are_stable_across_a_moving_build_clock():
+    later = FIXED_UTC + timedelta(days=9, hours=3, minutes=17)
+    first = build_v2_artifacts(fake_inputs(), retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
+    second = build_v2_artifacts(fake_inputs(), retrieved_at=later, evaluation_seasons=(2021,))
+
+    # The clock genuinely moved; without this the digests could match for the wrong reason.
+    assert first.manifest["build_timestamp"] != second.manifest["build_timestamp"]
+    assert [snapshot["retrieved_at"] for snapshot in first.manifest["source_snapshots"]] != [
+        snapshot["retrieved_at"] for snapshot in second.manifest["source_snapshots"]
+    ]
+
+    assert first.manifest["source_manifest_sha256"] == second.manifest["source_manifest_sha256"]
+    assert (
+        first.manifest["output"]["manifest_semantic_sha256"]
+        == second.manifest["output"]["manifest_semantic_sha256"]
+    )
+    assert _manifest_without_clock_fields(first.manifest) == _manifest_without_clock_fields(
+        second.manifest
+    )
+
+
+def test_semantic_manifest_digests_still_move_when_a_source_changes():
+    inputs = fake_inputs()
+    extra_player = pd.DataFrame([{"pfr_id": "pfr-unused", "gsis_id": "qb-unused"}])
+    changed = replace(
+        inputs, players=pd.concat([inputs.players, extra_player], ignore_index=True)
+    )
+
+    baseline = build_v2_artifacts(inputs, retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
+    moved = build_v2_artifacts(changed, retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
+
+    assert baseline.manifest["source_row_counts"]["players"] == len(inputs.players)
+    assert moved.manifest["source_row_counts"]["players"] == len(inputs.players) + 1
+    assert baseline.manifest["source_manifest_sha256"] != moved.manifest["source_manifest_sha256"]
+    assert (
+        baseline.manifest["output"]["manifest_semantic_sha256"]
+        != moved.manifest["output"]["manifest_semantic_sha256"]
+    )
 
 
 def test_atomic_writer_round_trips_pair_and_identical_second_write(built, tmp_path):
