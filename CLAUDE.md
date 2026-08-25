@@ -59,6 +59,29 @@ dashboard's operational documentation lives in the "Web dashboard operations" se
   (`ridge`/`gbm`) and `--alpha` are shared with `backtest.py`; `--edge-threshold` controls
   when `edge_flag` fires (default 2.0 points).
 
+### Ridge v2 (research track, not the shipped path)
+
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --dry-run
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --write
+
+`build_v2_dataset.py` builds the Ridge-v2 union feature artifact over the 2015-2025
+historical seasons with 2021-2025 as the evaluation window, and writes
+`data/processed/game_features_ridge_v2.parquet` plus `data/processed/ridge_v2_manifest.json`.
+It defaults to dry-run, prints every source row count, coverage figure and digest, refuses a
+Ridge-v1 destination, and replaces both files atomically or restores both. `ridge-v1` remains
+the shipped model: nothing in `web/` reads either v2 file and neither is copied into the
+Docker image. Runtime cost and the fresh-clone caveat are in `README.md`.
+
+**The manifest's four digests are the reproducibility contract, and all four exclude the
+build clock.** `schema_sha256` and `features_semantic_sha256` identify the output frame;
+`source_manifest_sha256` and `manifest_semantic_sha256` identify the inputs and the manifest
+itself. `build_timestamp` and each snapshot's `retrieved_at` remain in the manifest as
+provenance but are never hashed, so two builds from identical inputs produce identical
+digests and a digest that moves means data moved. `latest_event_at` is deliberately still
+hashed -- `retrieved_at` records when we fetched, `latest_event_at` is a property of the
+data itself. `_validate_artifacts` recomputes the digests from the stored manifest, which
+makes it an internal integrity check against a tampered file, not a cross-run signal.
+
 ## Data sourcing
 
 All data comes from `nflreadpy`. No API key, no scraping. `load_schedules()` carries the
@@ -81,7 +104,10 @@ Exactly three reviewed Parquet files ship in the repository and Docker image:
   separately typed, immutable official live rows after Stage 2 begins.
 
 Runtime startup fails closed if any file is missing, malformed, or if the schedule has no
-2026 regular-season rows. Artifact builders and workflow jobs may replace files atomically;
+2026 regular-season rows. `data/processed/ridge_v2_manifest.json` is also
+committed, but it is a provenance record rather than a packaged artifact -- it is not read at
+runtime and not copied into the image. The Ridge-v2 feature parquet is gitignored: at 7.3 MB
+against v1's 251 KB it would be re-added whole on every rebuild. Artifact builders and workflow jobs may replace files atomically;
 the web package is read-only and must never write them.
 
 ## Architecture

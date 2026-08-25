@@ -463,9 +463,7 @@ def test_semantic_manifest_digests_are_stable_across_a_moving_build_clock():
 def test_semantic_manifest_digests_still_move_when_a_source_changes():
     inputs = fake_inputs()
     extra_player = pd.DataFrame([{"pfr_id": "pfr-unused", "gsis_id": "qb-unused"}])
-    changed = replace(
-        inputs, players=pd.concat([inputs.players, extra_player], ignore_index=True)
-    )
+    changed = replace(inputs, players=pd.concat([inputs.players, extra_player], ignore_index=True))
 
     baseline = build_v2_artifacts(inputs, retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))
     moved = build_v2_artifacts(changed, retrieved_at=FIXED_UTC, evaluation_seasons=(2021,))

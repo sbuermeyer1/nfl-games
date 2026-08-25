@@ -23,6 +23,28 @@ Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 
     .\.venv\Scripts\python.exe -m pytest
 
+## Ridge-v2 research dataset
+
+Ridge v2 is a research track under evaluation. It does not serve the dashboard, and nothing
+in `web/` reads it.
+
+    # Report sources, coverage and digests; write nothing (the default):
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --dry-run
+
+    # Write the two Ridge-v2 artifacts:
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --write
+
+`--dry-run` and `--write` are mutually exclusive, and `--traceback` prints the failing stack
+instead of a one-line error. The build takes roughly 30 minutes, re-downloads its sources,
+and peaks near 11 GB of committed memory -- do not run it concurrently with
+`scripts/backtest.py`, and launch it detached rather than in a foreground shell you need
+back. It writes only `data/processed/game_features_ridge_v2.parquet` and
+`data/processed/ridge_v2_manifest.json`, and refuses a Ridge-v1 destination outright; the
+three packaged v1 artifacts are left byte-identical.
+
+Only the manifest is committed. The feature parquet is gitignored and rebuilt from source,
+so a fresh clone must run `--write` before anything can read it.
+
 ## Web dashboard operations
 
 The dashboard serves three checked-in artifacts:
