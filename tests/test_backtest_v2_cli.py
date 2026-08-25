@@ -225,10 +225,18 @@ def test_gate_report_prints_every_gate_with_its_status(tmp_path, capsys):
     backtest_v2.main(_output_args(tmp_path), dependencies=_fake_dependencies(_failing_report()))
     out = capsys.readouterr().out
 
-    for number in range(1, 12):
-        assert f"gate {number:>2}" in out
-    assert "FAIL" in out
-    assert "PENDING" in out
+    statuses = {
+        int(line.split()[1]): line.split()[2]
+        for line in out.splitlines()
+        if line.startswith("gate ")
+    }
+
+    assert sorted(statuses) == list(range(1, 12))
+    # Read the gate lines themselves: asserting only that "FAIL" appears somewhere passes
+    # on the failure summary line even when every gate is printed as PASS.
+    assert statuses[1] == "FAIL"  # the injected failure is margin MAE
+    assert statuses[2] == "PASS"  # total MAE is untouched and must not be tarred with it
+    assert statuses[11] == "PENDING"  # the shadow rebuild cannot run in this task
     assert "margin MAE" in out
 
 
