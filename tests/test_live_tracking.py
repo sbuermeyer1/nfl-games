@@ -513,6 +513,25 @@ def test_floor_blocks_the_week_after_the_first_active_week():
     assert advanced.empty
 
 
+def test_floor_blocks_a_week_behind_the_floor():
+    """A game whose week is BEHIND the floor must not publish.
+
+    This is reachable when a past week's game never got published (e.g. after a
+    tracker outage) and the floor has since moved on to a later week.
+    """
+    kickoff = NOW + pd.Timedelta(hours=12)
+
+    advanced = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=2),
+        predictions_fixture(),
+        NOW,
+        first_publishable_week=3,
+    )
+
+    assert advanced.empty
+
+
 def test_floor_of_none_publishes_nothing():
     kickoff = NOW + pd.Timedelta(hours=12)
 
