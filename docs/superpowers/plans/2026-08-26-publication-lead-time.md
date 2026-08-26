@@ -281,14 +281,20 @@ grep -n "^import\|^from" tests/test_schedule.py
 
 Expected: PASS.
 
-- [ ] **Step 9: Mutation-test the guard**
+- [ ] **Step 9: Lint and commit**
 
-Confirm each new conjunct is load-bearing. Commit first — a `git checkout --` restore reverts uncommitted edits and presents as "pattern not found".
+Commit **before** mutation testing. A `git checkout --` restore reverts uncommitted edits and presents as "pattern not found" rather than as data loss.
 
 ```bash
-printf 'wip: floor guard before mutation testing\n' > /tmp/msgwip.txt
-git add -A && git commit -F /tmp/msgwip.txt
+.venv/Scripts/python.exe -m ruff check .
+git add src/nfl_game/tracking/live.py tests/test_live_tracking.py tests/test_schedule.py
+printf '%s\n' "feat: gate publication on features-artifact vintage" "" "advance_live_ledger now requires first_publishable_week and creates a new" "record only for that week. refresh_2026 appends only the first two unplayed" "weeks, so the minimum week present for a season is the one whose predecessors" "were all final at build time; the next week was built without the current" "week's results and must not be published from." "" "Existing records always advance regardless of the floor." > /tmp/msg1.txt
+git commit -F /tmp/msg1.txt
 ```
+
+- [ ] **Step 10: Mutation-test the guard**
+
+Confirm each new conjunct is load-bearing. The tree is committed, so `git checkout --` restores cleanly after each mutation.
 
 Mutation A — delete the `None` branch:
 
@@ -310,16 +316,16 @@ git checkout -- src/nfl_game/tracking/live.py
 
 Expected: `test_floor_publishes_the_first_active_week` FAILS.
 
-If either mutation survives, the corresponding test is not discriminating — fix the test before continuing.
+If either mutation survives, the corresponding test is not discriminating — fix the test, amend the commit from Step 9, and re-run both mutations.
 
-- [ ] **Step 10: Lint and commit**
+After both mutations, confirm the tree is clean and the guard is back:
 
 ```bash
-.venv/Scripts/python.exe -m ruff check .
-git add src/nfl_game/tracking/live.py tests/test_live_tracking.py tests/test_schedule.py
-printf '%s\n' "feat: gate publication on features-artifact vintage" "" "advance_live_ledger now requires first_publishable_week and creates a new" "record only for that week. refresh_2026 appends only the first two unplayed" "weeks, so the minimum week present for a season is the one whose predecessors" "were all final at build time; the next week was built without the current" "week's results and must not be published from." "" "Existing records always advance regardless of the floor." > /tmp/msg1.txt
-git commit -F /tmp/msg1.txt
+git status --short
+.venv/Scripts/python.exe -m pytest tests/test_live_tracking.py -q
 ```
+
+Expected: no modified files (the untracked `task11-test.tmp.py` is pre-existing), tests pass.
 
 ---
 
@@ -657,7 +663,9 @@ Expected: PASS.
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Expected: PASS. The baseline before this plan is 133 tests in the main repo; the count should rise by the tests added here and nothing should fail. If a test outside these files fails, it is coupled to the 24-hour window — read it before changing it, and report it rather than silently adjusting an assertion.
+Expected: PASS. **The measured baseline before this plan is 442 passed, 1 warning, in ~25s.** The count should rise by the tests added across Tasks 1-3 and nothing should fail. If a test outside these files fails, it is coupled to the 24-hour window — read it before changing it, and report it rather than silently adjusting an assertion.
+
+Note: this baseline required `fastapi`, `uvicorn`, `quickjs==1.19.4` and `httpx2` to be installed into `.venv`, which was done on 2026-08-26. Without them 11 test files fail to collect.
 
 - [ ] **Step 7: Update the docs**
 
