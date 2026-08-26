@@ -117,10 +117,19 @@ def test_first_active_week_has_every_prior_week_final():
     If active_prediction_weeks ever stops returning a prefix of the unplayed weeks,
     the minimum week in the features artifact stops implying that its predecessors
     were complete at build time, and the floor silently admits stale predictions.
+
+    The fixture spans 6 weeks with `now` positioned so weeks 1-2 are final and
+    weeks 3-6 are unplayed: that leaves more than two unplayed weeks, so a
+    non-prefix slice (e.g. the last two, or an off-by-one window) returns weeks
+    whose predecessors include an unplayed week, and the assertion below can
+    actually fail. With only one unplayed week in the fixture, any nonempty
+    slice of it returns the same singleton, and every "prior" week is final by
+    construction regardless of which weeks the slice picks -- the property
+    would go untested.
     """
-    now = pd.Timestamp("2026-10-01T12:00:00Z")
+    now = pd.Timestamp("2026-09-15T12:00:00Z")
     rows = []
-    for week in range(1, 6):
+    for week in range(1, 7):
         kickoff = pd.Timestamp("2026-09-06T17:00:00Z") + pd.Timedelta(weeks=week - 1)
         played = kickoff + pd.Timedelta(hours=6) <= now
         rows.append(
