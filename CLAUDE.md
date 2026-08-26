@@ -59,6 +59,82 @@ dashboard's operational documentation lives in the "Web dashboard operations" se
   (`ridge`/`gbm`) and `--alpha` are shared with `backtest.py`; `--edge-threshold` controls
   when `edge_flag` fires (default 2.0 points).
 
+### Ridge v2 (research track, not the shipped path)
+
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --dry-run
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --write
+
+`build_v2_dataset.py` builds the Ridge-v2 union feature artifact over the 2015-2025
+historical seasons with 2021-2025 as the evaluation window, and writes
+`data/processed/game_features_ridge_v2.parquet` plus `data/processed/ridge_v2_manifest.json`.
+It defaults to dry-run, prints every source row count, coverage figure and digest, refuses a
+Ridge-v1 destination, and replaces both files atomically or restores both. `ridge-v1` remains
+the shipped model: nothing in `web/` reads either v2 file and neither is copied into the
+Docker image. Runtime cost and the fresh-clone caveat are in `README.md`.
+
+**The manifest's four digests are the reproducibility contract, and all four exclude the
+build clock.** `schema_sha256` and `features_semantic_sha256` identify the output frame;
+`source_manifest_sha256` and `manifest_semantic_sha256` identify the inputs and the manifest
+itself. `build_timestamp` and each snapshot's `retrieved_at` remain in the manifest as
+provenance but are never hashed, so two builds from identical inputs produce identical
+digests and a digest that moves means data moved. `latest_event_at` is deliberately still
+hashed -- `retrieved_at` records when we fetched, `latest_event_at` is a property of the
+data itself. `_validate_artifacts` recomputes the digests from the stored manifest, which
+makes it an internal integrity check against a tampered file, not a cross-run signal.
+
+### The Ridge-v2 experiment result: the challenger TIES Ridge v1 exactly
+
+Run 2026-08-25 on the locked artifact. **Gates 3, 4, 5, 6 and 9 FAIL, so Ridge v1 remains
+official** and nothing about the shipped model, tracker or website changes.
+
+**The headline is in the selections, not the gate table.** The nested selection chose **C0 --
+the exact Ridge-v1 schema -- for both targets in all five evaluation seasons**, so the
+challenger reproduces the champion: all **1,359 outer predictions are bit-identical** to
+Ridge v1 (max absolute difference 0.0), and margin MAE agrees to full float precision at
+10.273977625706554. Per-season improvement is exactly 0.0000 in every season. None of the
+Ridge-v2 blocks -- ratings, quarterback, style, personnel continuity, PFR -- earned selection
+in a single evaluation season. Only the 2019 and 2020 calibration seeds picked non-C0
+configurations (C4/C1), on two or three seasons of training data, with an inner margin MAE
+of 25.0 and 20.3: overfitting, not signal.
+
+**Do not read gates 1 and 2 as evidence of improvement.** They test `< 10.274` and `< 10.684`
+-- the *rounded* literals from the recorded baseline -- so a challenger that is bit-identical
+to the champion passes them by 2.2e-05 and 1.8e-04. Those two gates cannot distinguish a tie
+from a win. Gate 9 (Brier) fails by 0.0001 *despite* identical point predictions, because the
+v2 calibrator is seeded on 2019-2020 where the selection did pick C4/C1. Gate 6 fails on the
+margin side only (coefficient -0.0218, the Ridge-v1 value); the total side passes at +0.2924.
+
+**The C1 rating block cannot be ablated**, measured on live data: removing it raises
+`rating variant maps canonical column(s) outside the target schema` for margin and
+`total_points/C1 has no rating-variant canonical columns` for the total. The rating-variant
+contract requires a non-C0 schema to declare its canonical rating columns, and relaxing that
+would change the manifest the experiment exists to measure. Those rows are recorded as
+`not_constructible` with the exact error rather than dropped. Ablations therefore exist only
+for 2019-2020; the C0 seasons have no blocks to remove.
+
+### FTN charting (E1) was measured separately and REJECTED
+
+Run 2026-08-25. FTN begins in 2022, so only 2023-2025 have a prior charting season to train
+on. Two arms trained on identical rows -- C0 alone versus C0 plus the FTN block:
+
+| season | margin (core -> E1) | total (core -> E1) |
+| --- | --- | --- |
+| 2023 | 10.8592 -> 11.0589 | 10.7244 -> 10.5001 |
+| 2024 | 10.3020 -> 10.4323 | 10.4293 -> 10.8638 |
+| 2025 | 10.3356 -> 10.4002 | 10.5337 -> 10.5037 |
+
+Pooled, FTN costs **-0.1315** MAE on margin (worse in 3 of 3 seasons) and **-0.0601** on total
+(better in 2 of 3, but 2024 loses 0.43). Nothing here justifies adding charting to the model,
+and it is consistent with the core result that no v2 block earned selection.
+
+**Two live-schema facts about this feed, both measured before the code was written.** The FTN
+table has **no team column** -- it carries `nflverse_game_id`/`nflverse_play_id` only, so
+offence comes from a play-by-play join on `posteam`; 100% of charted plays join, across
+2022-2025. And **`date_pulled` is not an availability time**: it is the archive's snapshot
+stamp, with 2022 rows carrying 2024 dates, so the as-of rule is week ordering like every other
+block. Live coverage is 2,278 charted team-games, 32 teams per season, 73-81 charted plays per
+team-game.
+
 ## Data sourcing
 
 All data comes from `nflreadpy`. No API key, no scraping. `load_schedules()` carries the
@@ -81,7 +157,10 @@ Exactly three reviewed Parquet files ship in the repository and Docker image:
   separately typed, immutable official live rows after Stage 2 begins.
 
 Runtime startup fails closed if any file is missing, malformed, or if the schedule has no
-2026 regular-season rows. Artifact builders and workflow jobs may replace files atomically;
+2026 regular-season rows. `data/processed/ridge_v2_manifest.json` is also
+committed, but it is a provenance record rather than a packaged artifact -- it is not read at
+runtime and not copied into the image. The Ridge-v2 feature parquet is gitignored: at 7.3 MB
+against v1's 251 KB it would be re-added whole on every rebuild. Artifact builders and workflow jobs may replace files atomically;
 the web package is read-only and must never write them.
 
 ## Architecture

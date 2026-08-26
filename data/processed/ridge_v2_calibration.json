@@ -1,0 +1,133 @@
+{
+  "calibration_seasons": [
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "fits": [
+    {
+      "n_training_games": 502,
+      "prediction_season": 2021,
+      "target": "cover",
+      "training_seasons": [
+        2019,
+        2020
+      ]
+    },
+    {
+      "n_training_games": 506,
+      "prediction_season": 2021,
+      "target": "over",
+      "training_seasons": [
+        2019,
+        2020
+      ]
+    },
+    {
+      "n_training_games": 770,
+      "prediction_season": 2022,
+      "target": "cover",
+      "training_seasons": [
+        2019,
+        2020,
+        2021
+      ]
+    },
+    {
+      "n_training_games": 775,
+      "prediction_season": 2022,
+      "target": "over",
+      "training_seasons": [
+        2019,
+        2020,
+        2021
+      ]
+    },
+    {
+      "n_training_games": 1031,
+      "prediction_season": 2023,
+      "target": "cover",
+      "training_seasons": [
+        2019,
+        2020,
+        2021,
+        2022
+      ]
+    },
+    {
+      "n_training_games": 1043,
+      "prediction_season": 2023,
+      "target": "over",
+      "training_seasons": [
+        2019,
+        2020,
+        2021,
+        2022
+      ]
+    },
+    {
+      "n_training_games": 1289,
+      "prediction_season": 2024,
+      "target": "cover",
+      "training_seasons": [
+        2019,
+        2020,
+        2021,
+        2022,
+        2023
+      ]
+    },
+    {
+      "n_training_games": 1313,
+      "prediction_season": 2024,
+      "target": "over",
+      "training_seasons": [
+        2019,
+        2020,
+        2021,
+        2022,
+        2023
+      ]
+    },
+    {
+      "n_training_games": 1557,
+      "prediction_season": 2025,
+      "target": "cover",
+      "training_seasons": [
+        2019,
+        2020,
+        2021,
+        2022,
+        2023,
+        2024
+      ]
+    },
+    {
+      "n_training_games": 1582,
+      "prediction_season": 2025,
+      "target": "over",
+      "training_seasons": [
+        2019,
+        2020,
+        2021,
+        2022,
+        2023,
+        2024
+      ]
+    }
+  ],
+  "method": "leak-free per-season logistic calibration on model-minus-line edge",
+  "model_version": "ridge-v2",
+  "n_calibrated_games": 1359,
+  "report_seasons": [
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ]
+}

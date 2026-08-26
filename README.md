@@ -7,6 +7,10 @@ The model is **market-blind**: it never sees the betting line when predicting. A
 layer compares model output to the market and reports calibrated cover probabilities.
 
 Data source: [`nflreadpy`](https://nflreadpy.nflverse.com/). No API key required.
+The optional advanced-stat candidate uses public
+[`nflverse` PFR releases](https://github.com/nflverse/nflverse-data/releases/tag/pfr_advstats)
+derived from [Pro Football Reference](https://www.pro-football-reference.com/) data; credit
+for those fields belongs to nflverse and Pro Football Reference.
 
 Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 
@@ -18,6 +22,52 @@ Design: `docs/superpowers/specs/2026-07-23-nfl-game-model-design.md`
 ## Tests
 
     .\.venv\Scripts\python.exe -m pytest
+
+## Ridge-v2 research dataset
+
+Ridge v2 is a research track under evaluation. It does not serve the dashboard, and nothing
+in `web/` reads it.
+
+    # Report sources, coverage and digests; write nothing (the default):
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --dry-run
+
+    # Write the two Ridge-v2 artifacts:
+    .\.venv\Scripts\python.exe scripts\build_v2_dataset.py --write
+
+`--dry-run` and `--write` are mutually exclusive, and `--traceback` prints the failing stack
+instead of a one-line error. The build takes roughly 30 minutes, re-downloads its sources,
+and peaks near 11 GB of committed memory -- do not run it concurrently with
+`scripts/backtest.py`, and launch it detached rather than in a foreground shell you need
+back. It writes only `data/processed/game_features_ridge_v2.parquet` and
+`data/processed/ridge_v2_manifest.json`, and refuses a Ridge-v1 destination outright; the
+three packaged v1 artifacts are left byte-identical.
+
+Only the manifest is committed. The feature parquet is gitignored and rebuilt from source,
+so a fresh clone must run `--write` before anything can read it.
+
+The locked research experiment runs on top of that artifact:
+
+    .\.venv\Scripts\python.exe scripts\backtest_v2.py --dry-run
+    .\.venv\Scripts\python.exe scripts\backtest_v2.py --write
+
+It reproduces Ridge v1 over 2019-2025, runs the Ridge-v2 nested walk-forward over the same
+span, evaluates promotion on the identical 2021-2025 rows, and prints promotion gates 1-10
+with gate 11 pending. It takes about 22 minutes, defaults to dry-run, and writes only the
+four research artifacts (`ridge_v2_outer_predictions.parquet`, `ridge_v2_evaluation.json`,
+`ridge_v2_ablation.parquet`, `ridge_v2_calibration.json`) -- all four are committed, and a
+Ridge-v1 destination is refused. `--require-research-gates` makes a failed gate exit
+nonzero; without it the run reports and exits 0.
+
+### FTN charting (E1, research only)
+
+    .\.venv\Scripts\python.exe scripts\backtest_v2_ftn.py --dry-run
+
+FTN charting begins in 2022, which is too short a history for the production candidate, so
+this is a separate experiment that cannot promote anything. It compares two arms trained on
+identical rows -- the C0 core schema, and that schema plus the FTN features -- for each outer
+season the 2022+ history supports (2023-2025). It refuses to write over any Ridge-v1 or
+Task 13-17 artifact, defaults to dry-run, and takes about a minute once the sources are
+cached. **Result: FTN did not help** -- see CLAUDE.md.
 
 ## Web dashboard operations
 

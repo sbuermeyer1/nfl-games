@@ -5,6 +5,7 @@ import pytest
 from nfl_game.backtest import ats_by_threshold, evaluate, market_comparison_regression, walk_forward
 from nfl_game.model.features import FEATURE_COLS
 from nfl_game.model.predict import GameModel
+from nfl_game.paths import PROCESSED_DIR
 
 
 def _features(seasons=(2021, 2022, 2023), n_per=100, seed=0):
@@ -21,6 +22,19 @@ def _features(seasons=(2021, 2022, 2023), n_per=100, seed=0):
         df["total_line"] = df["total_points"] + rng.normal(scale=2.0, size=n_per)
         frames.append(df)
     return pd.concat(frames, ignore_index=True)
+
+
+def test_ridge_v1_real_artifact_remains_frozen():
+    features = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
+    preds = walk_forward(features, list(range(2021, 2026)), estimator="ridge", alpha=1.0)
+    metrics = evaluate(preds)
+    assert metrics["n_games"] == 1359
+    assert metrics["margin_mae"] == pytest.approx(10.274, abs=5e-4)
+    assert metrics["total_mae"] == pytest.approx(10.684, abs=5e-4)
+    assert metrics["ats_hit_rate"] == pytest.approx(0.4977375566, abs=5e-7)
+    assert metrics["ou_hit_rate"] == pytest.approx(0.5022255193, abs=5e-7)
+
+    assert market_comparison_regression(preds)["model_coef"] == pytest.approx(-0.0218, abs=5e-5)
 
 
 def test_walk_forward_only_scores_test_seasons():

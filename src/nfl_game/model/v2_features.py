@@ -1,0 +1,817 @@
+"""Target-specific Ridge-v2 game-feature assembly and frozen manifests."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+
+import numpy as np
+import pandas as pd
+
+from nfl_game.data.teams import normalize_team_codes
+from nfl_game.model.features import FEATURE_COLS
+from nfl_game.model.v2_config import (
+    CANDIDATES,
+    PRIOR_SEASON_WEIGHTS,
+    RATING_WINDOWS,
+    FeatureManifest,
+    rating_setting_key,
+    rating_variant_physical_column,
+)
+
+GAME_KEYS = ("game_id", "season", "week")
+TEAM_WEEK_KEYS = ("season", "week", "team")
+
+_RATING_TARGETS = (
+    "epa_play",
+    "epa_pass",
+    "epa_rush",
+    "success_rate",
+    "early_down_epa",
+    "neutral_epa",
+    "explosive_pass_rate",
+    "explosive_rush_rate",
+)
+RAW_NEUTRAL_PRIORS = MappingProxyType(
+    {
+        **{
+            f"{window}_{unit}_{target}": 0.0
+            for window in ("short", "long")
+            for unit in ("off", "def")
+            for target in _RATING_TARGETS
+        },
+        "qb_epa_per_db": 0.0,
+        "qb_cpoe": 0.0,
+        "qb_sack_rate": 0.065,
+        "qb_int_rate": 0.025,
+        "qb_change_epa": 0.0,
+        "qb_new_starter": 0.0,
+        "qb_rookie": 0.0,
+        "qb_uncertain": 1.0,
+        "neutral_pass_rate": 0.55,
+        "pace_seconds": 28.0,
+        "turnover_rate": 0.025,
+        "explosive_play_rate": 0.10,
+        "starting_field_position": 25.0,
+        "special_teams_epa": 0.0,
+        "style_imputed": 1.0,
+        "off_returning_share": 0.70,
+        "def_returning_share": 0.70,
+        "off_snap_hhi": 0.10,
+        "def_snap_hhi": 0.10,
+        "depth_chart_change_rate": 0.10,
+        "roster_churn": 0.30,
+        "personnel_imputed": 1.0,
+        "pfr_pressure_rate": 0.25,
+        "pfr_bad_throw_rate": 0.15,
+        "pfr_drop_rate": 0.05,
+        "pfr_rec_drop_rate": 0.05,
+        "pfr_rush_ybc": 2.5,
+        "pfr_rush_yac": 2.5,
+        "pfr_broken_tackle_rate": 0.10,
+        "pfr_def_missed_tackle_rate": 0.10,
+        "pfr_def_pressure_rate": 0.25,
+        "pfr_imputed": 1.0,
+    }
+)
+
+
+MARGIN_FEATURES_BY_BLOCK = {
+    "C0": tuple(FEATURE_COLS),
+    "C1": (
+        "rating_net_diff_short",
+        "rating_net_diff_long",
+        "pass_matchup_diff_short",
+        "pass_matchup_diff_long",
+        "rush_matchup_diff_short",
+        "rush_matchup_diff_long",
+        "success_diff_short",
+        "success_diff_long",
+        "early_down_diff_short",
+        "neutral_diff_short",
+        "explosive_pass_diff",
+        "explosive_rush_diff",
+        "rest_diff",
+        "home_indicator",
+        "div_game",
+    ),
+    "C2": (
+        "qb_epa_diff",
+        "qb_cpoe_diff",
+        "qb_sack_rate_diff",
+        "qb_int_rate_diff",
+        "qb_change_epa_diff",
+        "qb_new_starter_any",
+        "qb_rookie_any",
+        "qb_uncertain_any",
+    ),
+    "C3": (
+        "neutral_pass_rate_diff",
+        "pace_diff",
+        "turnover_rate_diff",
+        "explosive_play_diff",
+        "field_position_diff",
+        "special_teams_diff",
+        "style_imputed_any",
+    ),
+    "C4": (
+        "off_returning_share_diff",
+        "def_returning_share_diff",
+        "off_snap_hhi_diff",
+        "def_snap_hhi_diff",
+        "depth_change_diff",
+        "roster_churn_diff",
+        "personnel_imputed_any",
+    ),
+    "C5": (
+        "pfr_pressure_edge_diff",
+        "pfr_accuracy_diff",
+        "pfr_drop_diff",
+        "pfr_rush_contact_diff",
+        "pfr_tackle_diff",
+        "pfr_imputed_any",
+    ),
+}
+
+TOTAL_FEATURES_BY_BLOCK = {
+    "C0": tuple(FEATURE_COLS),
+    "C1": (
+        "rating_matchup_sum_short",
+        "rating_matchup_sum_long",
+        "pass_matchup_sum_short",
+        "pass_matchup_sum_long",
+        "rush_matchup_sum_short",
+        "rush_matchup_sum_long",
+        "success_matchup_sum_short",
+        "success_matchup_sum_long",
+        "early_down_matchup_sum_short",
+        "neutral_matchup_sum_short",
+        "explosive_pass_matchup_sum",
+        "explosive_rush_matchup_sum",
+        "is_dome",
+        "temp_outdoor",
+        "wind_outdoor",
+    ),
+    "C2": (
+        "qb_epa_sum",
+        "qb_cpoe_sum",
+        "qb_sack_rate_sum",
+        "qb_int_rate_sum",
+        "qb_change_epa_sum",
+        "qb_new_starter_any",
+        "qb_rookie_any",
+        "qb_uncertain_any",
+    ),
+    "C3": (
+        "neutral_pass_rate_mean",
+        "pace_mean",
+        "turnover_rate_sum",
+        "explosive_play_sum",
+        "field_position_sum",
+        "special_teams_sum",
+        "style_imputed_any",
+    ),
+    "C4": (
+        "off_returning_share_min",
+        "def_returning_share_min",
+        "off_snap_hhi_sum",
+        "def_snap_hhi_sum",
+        "depth_change_sum",
+        "roster_churn_sum",
+        "personnel_imputed_any",
+    ),
+    "C5": (
+        "pfr_pressure_environment_sum",
+        "pfr_accuracy_sum",
+        "pfr_drop_sum",
+        "pfr_rush_contact_sum",
+        "pfr_tackle_environment_sum",
+        "pfr_imputed_any",
+    ),
+}
+
+DEFAULT_SOURCES = {
+    "C0": "ridge-v1-feature-cols@v1",
+    "C1": "nflverse-pbp-team-ratings@v1|nflreadpy@0.1.5",
+    "C2": "nflverse-player-stats-depth-charts@v1|nflreadpy@0.1.5",
+    "C3": "nflverse-pbp-style@v1|nflreadpy@0.1.5",
+    "C4": "nflverse-rosters-depth-snap-counts@v1|nflreadpy@0.1.5",
+    "C5": "nflverse-pfr-advanced-weekly@v1|nflreadpy@0.1.5",
+}
+
+
+def _c1_variant_features(blocks: Mapping[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """Return the exact cumulative C1-minus-C0 contract in stable feature order."""
+    c0 = set(blocks["C0"])
+    return tuple(column for column in blocks["C1"] if column not in c0)
+
+
+_MARGIN_RATING_VARIANT_FEATURES = _c1_variant_features(MARGIN_FEATURES_BY_BLOCK)
+_TOTAL_RATING_VARIANT_FEATURES = _c1_variant_features(TOTAL_FEATURES_BY_BLOCK)
+
+
+def _rating_variant_contract() -> Mapping[str, object]:
+    variants = {}
+    for short_halflife, long_halflife in RATING_WINDOWS:
+        for prior_season_weight in PRIOR_SEASON_WEIGHTS:
+            key = rating_setting_key(short_halflife, long_halflife, prior_season_weight)
+            targets = {}
+            for target, columns in (
+                ("margin", _MARGIN_RATING_VARIANT_FEATURES),
+                ("total", _TOTAL_RATING_VARIANT_FEATURES),
+            ):
+                targets[target] = MappingProxyType(
+                    {
+                        column: rating_variant_physical_column(
+                            column, short_halflife, long_halflife, prior_season_weight
+                        )
+                        for column in columns
+                    }
+                )
+            variants[key] = MappingProxyType(targets)
+    return MappingProxyType(variants)
+
+
+DEFAULT_CONSTANTS: Mapping[str, object] = MappingProxyType(
+    {
+        "raw_neutral_priors": RAW_NEUTRAL_PRIORS,
+        "rating_variant_columns": _rating_variant_contract(),
+        "c5_production_eligible": False,
+        "pfr_rec_drop_rate_coverage_2025": 0.6912,
+    }
+)
+
+
+def _matchup_formula(raw: str, window: str, operation: str) -> str:
+    home_edge = f"home.{window}_off_{raw} - away.{window}_def_{raw}"
+    away_edge = f"away.{window}_off_{raw} - home.{window}_def_{raw}"
+    return f"({home_edge}) {operation} ({away_edge})"
+
+
+def _sided_formula(raw: str, operation: str) -> str:
+    return f"home.{raw} {operation} away.{raw}"
+
+
+FEATURE_FORMULAS = {
+    **{
+        f"rating_net_diff_{window}": (
+            f"home.{window}_off_epa_play + home.{window}_def_epa_play "
+            f"- away.{window}_off_epa_play - away.{window}_def_epa_play"
+        )
+        for window in ("short", "long")
+    },
+    **{
+        f"{name}_matchup_{kind}_{window}": _matchup_formula(
+            raw, window, "-" if kind == "diff" else "+"
+        )
+        for name, raw in (("pass", "epa_pass"), ("rush", "epa_rush"))
+        for kind in ("diff", "sum")
+        for window in ("short", "long")
+    },
+    **{
+        (
+            f"success_diff_{window}" if kind == "diff" else f"success_matchup_sum_{window}"
+        ): _matchup_formula("success_rate", window, "-" if kind == "diff" else "+")
+        for kind in ("diff", "sum")
+        for window in ("short", "long")
+    },
+    **{
+        f"{name}_diff_short": _matchup_formula(raw, "short", "-")
+        for name, raw in (("early_down", "early_down_epa"), ("neutral", "neutral_epa"))
+    },
+    **{
+        f"{name}_matchup_sum_short": _matchup_formula(raw, "short", "+")
+        for name, raw in (("early_down", "early_down_epa"), ("neutral", "neutral_epa"))
+    },
+    **{
+        f"{name}_diff": _matchup_formula(raw, "short", "-")
+        for name, raw in (
+            ("explosive_pass", "explosive_pass_rate"),
+            ("explosive_rush", "explosive_rush_rate"),
+        )
+    },
+    **{
+        f"{name}_matchup_sum": _matchup_formula(raw, "short", "+")
+        for name, raw in (
+            ("explosive_pass", "explosive_pass_rate"),
+            ("explosive_rush", "explosive_rush_rate"),
+        )
+    },
+    "rating_matchup_sum_short": _matchup_formula("epa_play", "short", "+"),
+    "rating_matchup_sum_long": _matchup_formula("epa_play", "long", "+"),
+    "rest_diff": "base.home_rest - base.away_rest",
+    "home_indicator": "constant 1.0",
+    "div_game": "base.div_game",
+    "is_dome": "base.is_dome",
+    "temp_outdoor": "base.temp_outdoor",
+    "wind_outdoor": "base.wind_outdoor",
+    **{
+        f"{output}_{kind}": _sided_formula(raw, "-" if kind == "diff" else "+")
+        for output, raw in (
+            ("qb_epa", "qb_epa_per_db"),
+            ("qb_cpoe", "qb_cpoe"),
+            ("qb_sack_rate", "qb_sack_rate"),
+            ("qb_int_rate", "qb_int_rate"),
+            ("qb_change_epa", "qb_change_epa"),
+        )
+        for kind in ("diff", "sum")
+    },
+    "qb_new_starter_any": "max(home.qb_new_starter, away.qb_new_starter)",
+    "qb_rookie_any": "max(home.qb_rookie, away.qb_rookie)",
+    "qb_uncertain_any": ("max(home.qb_uncertain, away.qb_uncertain, any_missing_qb_input)"),
+    **{
+        f"{output}_diff": _sided_formula(raw, "-")
+        for output, raw in (
+            ("neutral_pass_rate", "neutral_pass_rate"),
+            ("pace", "pace_seconds"),
+            ("turnover_rate", "turnover_rate"),
+            ("explosive_play", "explosive_play_rate"),
+            ("field_position", "starting_field_position"),
+            ("special_teams", "special_teams_epa"),
+        )
+    },
+    "neutral_pass_rate_mean": "(home.neutral_pass_rate + away.neutral_pass_rate) / 2",
+    "pace_mean": "(home.pace_seconds + away.pace_seconds) / 2",
+    **{
+        f"{output}_sum": _sided_formula(raw, "+")
+        for output, raw in (
+            ("turnover_rate", "turnover_rate"),
+            ("explosive_play", "explosive_play_rate"),
+            ("field_position", "starting_field_position"),
+            ("special_teams", "special_teams_epa"),
+        )
+    },
+    "style_imputed_any": "max(home.style_imputed, away.style_imputed, missing_side_indicator)",
+    **{
+        f"{output}_diff": _sided_formula(raw, "-")
+        for output, raw in (
+            ("off_returning_share", "off_returning_share"),
+            ("def_returning_share", "def_returning_share"),
+            ("off_snap_hhi", "off_snap_hhi"),
+            ("def_snap_hhi", "def_snap_hhi"),
+            ("depth_change", "depth_chart_change_rate"),
+            ("roster_churn", "roster_churn"),
+        )
+    },
+    **{
+        f"{output}_sum": _sided_formula(raw, "+")
+        for output, raw in (
+            ("off_snap_hhi", "off_snap_hhi"),
+            ("def_snap_hhi", "def_snap_hhi"),
+            ("depth_change", "depth_chart_change_rate"),
+            ("roster_churn", "roster_churn"),
+        )
+    },
+    "off_returning_share_min": "min(home.off_returning_share, away.off_returning_share)",
+    "def_returning_share_min": "min(home.def_returning_share, away.def_returning_share)",
+    "personnel_imputed_any": (
+        "max(home.personnel_imputed, away.personnel_imputed, missing_side_indicator)"
+    ),
+    "pfr_pressure_edge_diff": (
+        "(away.pfr_pressure_rate + home.pfr_def_pressure_rate) "
+        "- (home.pfr_pressure_rate + away.pfr_def_pressure_rate)"
+    ),
+    "pfr_accuracy_diff": "away.pfr_bad_throw_rate - home.pfr_bad_throw_rate",
+    "pfr_drop_diff": (
+        "(away.pfr_drop_rate + away.pfr_rec_drop_rate) "
+        "- (home.pfr_drop_rate + home.pfr_rec_drop_rate)"
+    ),
+    "pfr_rush_contact_diff": (
+        "home.pfr_rush_ybc + home.pfr_rush_yac + home.pfr_broken_tackle_rate "
+        "- away.pfr_rush_ybc - away.pfr_rush_yac - away.pfr_broken_tackle_rate"
+    ),
+    "pfr_tackle_diff": ("away.pfr_def_missed_tackle_rate - home.pfr_def_missed_tackle_rate"),
+    "pfr_pressure_environment_sum": (
+        "home.pfr_pressure_rate + away.pfr_def_pressure_rate "
+        "+ away.pfr_pressure_rate + home.pfr_def_pressure_rate"
+    ),
+    "pfr_accuracy_sum": "-(home.pfr_bad_throw_rate + away.pfr_bad_throw_rate)",
+    "pfr_drop_sum": (
+        "home.pfr_drop_rate + home.pfr_rec_drop_rate + away.pfr_drop_rate + away.pfr_rec_drop_rate"
+    ),
+    "pfr_rush_contact_sum": (
+        "home.pfr_rush_ybc + home.pfr_rush_yac + home.pfr_broken_tackle_rate "
+        "+ away.pfr_rush_ybc + away.pfr_rush_yac + away.pfr_broken_tackle_rate"
+    ),
+    "pfr_tackle_environment_sum": (
+        "home.pfr_def_missed_tackle_rate + away.pfr_def_missed_tackle_rate"
+    ),
+    "pfr_imputed_any": "max(home.pfr_imputed, away.pfr_imputed, missing_side_indicator)",
+}
+
+
+@dataclass(frozen=True)
+class V2FeatureBundle:
+    frame: pd.DataFrame
+    manifest: FeatureManifest
+
+
+def _require_columns(frame: pd.DataFrame, columns: Sequence[str], *, label: str) -> None:
+    missing = sorted(set(columns).difference(frame.columns))
+    if missing:
+        raise ValueError(f"{label} missing columns: {missing}")
+
+
+def _validate_game_keys(frame: pd.DataFrame) -> None:
+    _require_columns(frame, (*GAME_KEYS, "home_team", "away_team"), label="base features")
+    if frame[list(GAME_KEYS)].isna().any(axis=None):
+        raise ValueError("base features contain a missing game key")
+    if frame[["home_team", "away_team"]].isna().any(axis=None):
+        raise ValueError("base features contain missing team identity")
+    if frame.duplicated(list(GAME_KEYS)).any() or frame["game_id"].duplicated().any():
+        raise ValueError("base features contain a duplicate game key")
+
+
+def _merge_team_sides(
+    games: pd.DataFrame, block: pd.DataFrame, columns: Sequence[str], *, name: str
+) -> pd.DataFrame:
+    _require_columns(block, (*TEAM_WEEK_KEYS, *columns), label=f"{name} block")
+    normalized = normalize_team_codes(block, ["team"])
+    sided = games[[*GAME_KEYS, "home_team", "away_team"]].copy()
+    for side in ("home", "away"):
+        team_column = f"{side}_team"
+        renamed = normalized[[*TEAM_WEEK_KEYS, *columns]].rename(
+            columns={
+                "team": team_column,
+                **{column: f"{side}_{column}" for column in columns},
+            }
+        )
+        sided = sided.merge(
+            renamed,
+            on=["season", "week", team_column],
+            how="left",
+            validate="many_to_one",
+        )
+    return sided
+
+
+def _fill_numeric_sides(
+    sided: pd.DataFrame,
+    columns: Sequence[str],
+    *,
+    source_flag: str | None = None,
+) -> pd.Series:
+    missing_priors = sorted(set(columns).difference(RAW_NEUTRAL_PRIORS))
+    if missing_priors:
+        raise ValueError(f"missing frozen raw neutral priors: {missing_priors}")
+    value_columns = [f"{side}_{column}" for side in ("home", "away") for column in columns]
+    numeric = sided[value_columns].apply(pd.to_numeric, errors="coerce")
+    invalid = numeric.isna().any(axis=1)
+    non_finite = ~np.isfinite(numeric.fillna(0.0).to_numpy(dtype=float)).all(axis=1)
+    if non_finite.any():
+        raise ValueError("non-finite value in team-week feature block")
+    for side in ("home", "away"):
+        for column in columns:
+            sided[f"{side}_{column}"] = numeric[f"{side}_{column}"].fillna(
+                RAW_NEUTRAL_PRIORS[column]
+            )
+    if source_flag is None:
+        return invalid.astype(int)
+    flag_columns = [f"home_{source_flag}", f"away_{source_flag}"]
+    flags = sided[flag_columns].apply(pd.to_numeric, errors="coerce")
+    invalid |= flags.isna().any(axis=1)
+    sided[flag_columns] = flags.fillna(RAW_NEUTRAL_PRIORS[source_flag])
+    return pd.concat([sided[flag_columns], invalid.rename("missing")], axis=1).max(axis=1)
+
+
+def _difference(sided: pd.DataFrame, column: str) -> pd.Series:
+    return sided[f"home_{column}"] - sided[f"away_{column}"]
+
+
+def _sum(sided: pd.DataFrame, column: str) -> pd.Series:
+    return sided[f"home_{column}"] + sided[f"away_{column}"]
+
+
+def _mean(sided: pd.DataFrame, column: str) -> pd.Series:
+    return _sum(sided, column) / 2.0
+
+
+def _minimum(sided: pd.DataFrame, column: str) -> pd.Series:
+    return sided[[f"home_{column}", f"away_{column}"]].min(axis=1)
+
+
+def _rating_features(games: pd.DataFrame, block: pd.DataFrame) -> pd.DataFrame:
+    targets = (
+        "epa_play",
+        "epa_pass",
+        "epa_rush",
+        "success_rate",
+        "early_down_epa",
+        "neutral_epa",
+        "explosive_pass_rate",
+        "explosive_rush_rate",
+    )
+    columns = tuple(
+        f"{window}_{unit}_{target}"
+        for window in ("short", "long")
+        for unit in ("off", "def")
+        for target in targets
+    )
+    sided = _merge_team_sides(games, block, columns, name="C1")
+    imputed = _fill_numeric_sides(sided, columns)
+    out = sided[list(GAME_KEYS)].copy()
+
+    def matchup(target: str, window: str, operation: str) -> pd.Series:
+        home_edge = sided[f"home_{window}_off_{target}"] - sided[f"away_{window}_def_{target}"]
+        away_edge = sided[f"away_{window}_off_{target}"] - sided[f"home_{window}_def_{target}"]
+        return home_edge - away_edge if operation == "diff" else home_edge + away_edge
+
+    for window in ("short", "long"):
+        out[f"rating_net_diff_{window}"] = (
+            sided[f"home_{window}_off_epa_play"]
+            + sided[f"home_{window}_def_epa_play"]
+            - sided[f"away_{window}_off_epa_play"]
+            - sided[f"away_{window}_def_epa_play"]
+        )
+        out[f"rating_matchup_sum_{window}"] = matchup("epa_play", window, "sum")
+        for prefix, target in (("pass", "epa_pass"), ("rush", "epa_rush")):
+            out[f"{prefix}_matchup_diff_{window}"] = matchup(target, window, "diff")
+            out[f"{prefix}_matchup_sum_{window}"] = matchup(target, window, "sum")
+        out[f"success_diff_{window}"] = matchup("success_rate", window, "diff")
+        out[f"success_matchup_sum_{window}"] = matchup("success_rate", window, "sum")
+    for prefix, target in (("early_down", "early_down_epa"), ("neutral", "neutral_epa")):
+        out[f"{prefix}_diff_short"] = matchup(target, "short", "diff")
+        out[f"{prefix}_matchup_sum_short"] = matchup(target, "short", "sum")
+    for prefix, target in (
+        ("explosive_pass", "explosive_pass_rate"),
+        ("explosive_rush", "explosive_rush_rate"),
+    ):
+        out[f"{prefix}_diff"] = matchup(target, "short", "diff")
+        out[f"{prefix}_matchup_sum"] = matchup(target, "short", "sum")
+    out["home_indicator"] = 1.0
+    out["rating_imputed_any"] = imputed
+    return out
+
+
+def _qb_features(games: pd.DataFrame, block: pd.DataFrame) -> pd.DataFrame:
+    values = ("qb_epa_per_db", "qb_cpoe", "qb_sack_rate", "qb_int_rate", "qb_change_epa")
+    flags = ("qb_new_starter", "qb_rookie", "qb_uncertain")
+    sided = _merge_team_sides(games, block, (*values, *flags), name="C2")
+    missing = _fill_numeric_sides(sided, values)
+    flag_missing = _fill_numeric_sides(sided, flags)
+    missing = pd.concat([missing, flag_missing], axis=1).max(axis=1)
+    out = sided[list(GAME_KEYS)].copy()
+    for source, feature in (
+        ("qb_epa_per_db", "qb_epa"),
+        ("qb_cpoe", "qb_cpoe"),
+        ("qb_sack_rate", "qb_sack_rate"),
+        ("qb_int_rate", "qb_int_rate"),
+        ("qb_change_epa", "qb_change_epa"),
+    ):
+        out[f"{feature}_diff"] = _difference(sided, source)
+        out[f"{feature}_sum"] = _sum(sided, source)
+    for flag in flags:
+        out[f"{flag}_any"] = sided[[f"home_{flag}", f"away_{flag}"]].max(axis=1)
+    out["qb_uncertain_any"] = pd.concat(
+        [out["qb_uncertain_any"], missing.rename("missing")], axis=1
+    ).max(axis=1)
+    return out
+
+
+def _style_features(games: pd.DataFrame, block: pd.DataFrame) -> pd.DataFrame:
+    values = (
+        "neutral_pass_rate",
+        "pace_seconds",
+        "turnover_rate",
+        "explosive_play_rate",
+        "starting_field_position",
+        "special_teams_epa",
+    )
+    sided = _merge_team_sides(games, block, (*values, "style_imputed"), name="C3")
+    imputed = _fill_numeric_sides(sided, values, source_flag="style_imputed")
+    out = sided[list(GAME_KEYS)].copy()
+    for source, feature in (
+        ("neutral_pass_rate", "neutral_pass_rate"),
+        ("pace_seconds", "pace"),
+        ("turnover_rate", "turnover_rate"),
+        ("explosive_play_rate", "explosive_play"),
+        ("starting_field_position", "field_position"),
+        ("special_teams_epa", "special_teams"),
+    ):
+        out[f"{feature}_diff"] = _difference(sided, source)
+    out["neutral_pass_rate_mean"] = _mean(sided, "neutral_pass_rate")
+    out["pace_mean"] = _mean(sided, "pace_seconds")
+    for source, feature in (
+        ("turnover_rate", "turnover_rate"),
+        ("explosive_play_rate", "explosive_play"),
+        ("starting_field_position", "field_position"),
+        ("special_teams_epa", "special_teams"),
+    ):
+        out[f"{feature}_sum"] = _sum(sided, source)
+    out["style_imputed_any"] = imputed
+    return out
+
+
+def _personnel_features(games: pd.DataFrame, block: pd.DataFrame) -> pd.DataFrame:
+    values = (
+        "off_returning_share",
+        "def_returning_share",
+        "off_snap_hhi",
+        "def_snap_hhi",
+        "depth_chart_change_rate",
+        "roster_churn",
+    )
+    sided = _merge_team_sides(games, block, (*values, "personnel_imputed"), name="C4")
+    imputed = _fill_numeric_sides(sided, values, source_flag="personnel_imputed")
+    out = sided[list(GAME_KEYS)].copy()
+    for source, feature in (
+        ("off_returning_share", "off_returning_share"),
+        ("def_returning_share", "def_returning_share"),
+        ("off_snap_hhi", "off_snap_hhi"),
+        ("def_snap_hhi", "def_snap_hhi"),
+        ("depth_chart_change_rate", "depth_change"),
+        ("roster_churn", "roster_churn"),
+    ):
+        out[f"{feature}_diff"] = _difference(sided, source)
+    for source, feature in (
+        ("off_snap_hhi", "off_snap_hhi"),
+        ("def_snap_hhi", "def_snap_hhi"),
+        ("depth_chart_change_rate", "depth_change"),
+        ("roster_churn", "roster_churn"),
+    ):
+        out[f"{feature}_sum"] = _sum(sided, source)
+    out["off_returning_share_min"] = _minimum(sided, "off_returning_share")
+    out["def_returning_share_min"] = _minimum(sided, "def_returning_share")
+    out["personnel_imputed_any"] = imputed
+    return out
+
+
+def _pfr_features(games: pd.DataFrame, block: pd.DataFrame) -> pd.DataFrame:
+    values = (
+        "pfr_pressure_rate",
+        "pfr_bad_throw_rate",
+        "pfr_drop_rate",
+        "pfr_rec_drop_rate",
+        "pfr_rush_ybc",
+        "pfr_rush_yac",
+        "pfr_broken_tackle_rate",
+        "pfr_def_missed_tackle_rate",
+        "pfr_def_pressure_rate",
+    )
+    sided = _merge_team_sides(games, block, (*values, "pfr_imputed"), name="C5")
+    imputed = _fill_numeric_sides(sided, values, source_flag="pfr_imputed")
+    out = sided[list(GAME_KEYS)].copy()
+    home_pressure = sided["home_pfr_pressure_rate"] + sided["away_pfr_def_pressure_rate"]
+    away_pressure = sided["away_pfr_pressure_rate"] + sided["home_pfr_def_pressure_rate"]
+    out["pfr_pressure_edge_diff"] = away_pressure - home_pressure
+    out["pfr_accuracy_diff"] = sided["away_pfr_bad_throw_rate"] - sided["home_pfr_bad_throw_rate"]
+    home_drops = sided["home_pfr_drop_rate"] + sided["home_pfr_rec_drop_rate"]
+    away_drops = sided["away_pfr_drop_rate"] + sided["away_pfr_rec_drop_rate"]
+    out["pfr_drop_diff"] = away_drops - home_drops
+    home_contact = (
+        sided["home_pfr_rush_ybc"]
+        + sided["home_pfr_rush_yac"]
+        + sided["home_pfr_broken_tackle_rate"]
+    )
+    away_contact = (
+        sided["away_pfr_rush_ybc"]
+        + sided["away_pfr_rush_yac"]
+        + sided["away_pfr_broken_tackle_rate"]
+    )
+    out["pfr_rush_contact_diff"] = home_contact - away_contact
+    out["pfr_tackle_diff"] = (
+        sided["away_pfr_def_missed_tackle_rate"] - sided["home_pfr_def_missed_tackle_rate"]
+    )
+    out["pfr_pressure_environment_sum"] = home_pressure + away_pressure
+    out["pfr_accuracy_sum"] = -(sided["home_pfr_bad_throw_rate"] + sided["away_pfr_bad_throw_rate"])
+    out["pfr_drop_sum"] = home_drops + away_drops
+    out["pfr_rush_contact_sum"] = home_contact + away_contact
+    out["pfr_tackle_environment_sum"] = (
+        sided["home_pfr_def_missed_tackle_rate"] + sided["away_pfr_def_missed_tackle_rate"]
+    )
+    out["pfr_imputed_any"] = imputed
+    return out
+
+
+_BLOCK_BUILDERS: dict[str, Callable[[pd.DataFrame, pd.DataFrame], pd.DataFrame]] = {
+    "C1": _rating_features,
+    "C2": _qb_features,
+    "C3": _style_features,
+    "C4": _personnel_features,
+    "C5": _pfr_features,
+}
+
+
+def team_block_to_game_features(
+    games: pd.DataFrame, block: pd.DataFrame, *, name: str
+) -> pd.DataFrame:
+    """Convert one normalized team-week block to one row per scheduled game."""
+    try:
+        builder = _BLOCK_BUILDERS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown Ridge-v2 feature block: {name!r}") from exc
+    return builder(games, block)
+
+
+def merge_v2_blocks(
+    base_features: pd.DataFrame, blocks: Mapping[str, pd.DataFrame]
+) -> pd.DataFrame:
+    """Merge target-week blocks onto unique games with cardinality validation."""
+    _validate_game_keys(base_features)
+    unknown = sorted(set(blocks).difference(_BLOCK_BUILDERS))
+    if unknown:
+        raise ValueError(f"unknown Ridge-v2 feature blocks: {unknown}")
+    frame = normalize_team_codes(base_features, ["home_team", "away_team"])
+    for name in CANDIDATES[1:]:
+        if name not in blocks:
+            continue
+        sided = team_block_to_game_features(frame, blocks[name], name=name)
+        frame = frame.merge(
+            sided,
+            on=list(GAME_KEYS),
+            how="left",
+            validate="one_to_one",
+        )
+    return frame
+
+
+def _cumulative_columns(blocks: Mapping[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+    cumulative: list[str] = []
+    result = {}
+    for candidate in CANDIDATES:
+        cumulative = list(dict.fromkeys([*cumulative, *blocks[candidate]]))
+        result[candidate] = tuple(cumulative)
+    return result
+
+
+def _json_compatible(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (tuple, set, frozenset)):
+        return [_json_compatible(item) for item in value]
+    return value
+
+
+def _manifest_version(
+    formulas: Mapping[str, str],
+    sources: Mapping[str, str],
+    constants: Mapping[str, object],
+) -> str:
+    payload = {"formulas": formulas, "sources": sources, "constants": constants}
+    encoded = json.dumps(_json_compatible(payload), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _manifest(
+    *, sources: Mapping[str, str] | None, constants: Mapping[str, object] | None
+) -> FeatureManifest:
+    source_versions = {**DEFAULT_SOURCES, **dict(sources or {})}
+    _validate_source_versions(source_versions)
+    supplied_constants = dict(constants or {})
+    if "raw_neutral_priors" in supplied_constants:
+        raise ValueError("the frozen raw neutral-prior map cannot be overridden")
+    frozen_constants = {**DEFAULT_CONSTANTS, **supplied_constants}
+    if frozen_constants["c5_production_eligible"] is not False:
+        raise ValueError("C5 is production-ineligible at 69.12% receiving drop-rate coverage")
+    if frozen_constants["pfr_rec_drop_rate_coverage_2025"] != 0.6912:
+        raise ValueError("the frozen 2025 PFR receiving drop-rate coverage is 0.6912")
+    version = _manifest_version(FEATURE_FORMULAS, source_versions, frozen_constants)
+    return FeatureManifest(
+        version=version,
+        margin_by_candidate=_cumulative_columns(MARGIN_FEATURES_BY_BLOCK),
+        total_by_candidate=_cumulative_columns(TOTAL_FEATURES_BY_BLOCK),
+        sources=source_versions,
+        constants=frozen_constants,
+    )
+
+
+def build_v2_game_features(
+    base_features: pd.DataFrame,
+    blocks: Mapping[str, pd.DataFrame],
+    *,
+    sources: Mapping[str, str] | None = None,
+    constants: Mapping[str, object] | None = None,
+) -> V2FeatureBundle:
+    """Build the union game artifact and its deterministic target-specific manifest."""
+    missing_blocks = sorted(set(CANDIDATES[1:]).difference(blocks))
+    if missing_blocks:
+        raise ValueError(f"missing Ridge-v2 feature blocks: {missing_blocks}")
+    frame = merge_v2_blocks(base_features, blocks)
+    manifest = _manifest(sources=sources, constants=constants)
+    manifested = tuple(
+        dict.fromkeys(manifest.columns("margin", "C5") + manifest.columns("total", "C5"))
+    )
+    _require_columns(frame, manifested, label="assembled Ridge-v2 features")
+    numeric = frame[list(manifested)].apply(pd.to_numeric, errors="coerce")
+    if numeric.isna().any(axis=None) or not np.isfinite(numeric.to_numpy(dtype=float)).all():
+        raise ValueError("assembled Ridge-v2 features contain missing or non-finite values")
+    frame[list(manifested)] = numeric
+    _validate_game_keys(frame)
+    return V2FeatureBundle(frame=frame.reset_index(drop=True), manifest=manifest)
+
+
+def _validate_source_versions(sources: Mapping[str, str]) -> None:
+    for name, contract in sources.items():
+        if not isinstance(contract, str) or not contract or contract != contract.strip():
+            raise ValueError(f"{name} must use a concrete versioned source contract")
+        parts = contract.split("|")
+        if any(
+            part.count("@") != 1
+            or not all(part.split("@", 1))
+            or any(character.isspace() for character in part)
+            for part in parts
+        ):
+            raise ValueError(f"{name} must use a concrete versioned source contract")

@@ -64,3 +64,78 @@ def load_ngs(seasons: list[int], stat_type: str, save: bool = True) -> pd.DataFr
     if save:
         df.to_parquet(RAW_DIR / f"ngs_{stat_type}_{_seasons_label(seasons)}.parquet")
     return df
+
+
+PLAYER_STATS_TEAM_COLS = ["team", "opponent_team"]
+ROSTER_TEAM_COLS = ["team"]
+DEPTH_CHART_TEAM_COLS = ["team"]
+SNAP_TEAM_COLS = ["team", "opponent"]
+PFR_TEAM_COLS = ["team", "opponent"]
+PFR_STAT_TYPES = ("pass", "rush", "rec", "def")
+
+
+def load_player_stats(seasons: list[int], save: bool = True) -> pd.DataFrame:
+    """Weekly player and team statistics."""
+    df = nflreadpy.load_player_stats(seasons, summary_level="week").to_pandas()
+    df = normalize_team_codes(df, PLAYER_STATS_TEAM_COLS)
+    if save:
+        df.to_parquet(RAW_DIR / f"player_stats_{_seasons_label(seasons)}.parquet")
+    return df
+
+
+def load_players(save: bool = True) -> pd.DataFrame:
+    """Player identity crosswalk without a season restriction."""
+    df = nflreadpy.load_players().to_pandas()
+    if save:
+        df.to_parquet(RAW_DIR / "players.parquet")
+    return df
+
+
+def load_rosters_weekly(seasons: list[int], save: bool = True) -> pd.DataFrame:
+    """Weekly roster snapshots."""
+    df = nflreadpy.load_rosters_weekly(seasons).to_pandas()
+    df = normalize_team_codes(df, ROSTER_TEAM_COLS)
+    if save:
+        df.to_parquet(RAW_DIR / f"rosters_weekly_{_seasons_label(seasons)}.parquet")
+    return df
+
+
+def load_depth_charts(seasons: list[int], save: bool = True) -> pd.DataFrame:
+    """Point-in-time depth charts with UTC timestamps."""
+    df = nflreadpy.load_depth_charts(seasons).to_pandas()
+    df = normalize_team_codes(df, DEPTH_CHART_TEAM_COLS)
+    if "dt" in df:
+        df["dt"] = pd.to_datetime(df["dt"], utc=True, errors="raise")
+    if save:
+        df.to_parquet(RAW_DIR / f"depth_charts_{_seasons_label(seasons)}.parquet")
+    return df
+
+
+def load_snap_counts(seasons: list[int], save: bool = True) -> pd.DataFrame:
+    """Weekly offensive and defensive snap counts."""
+    df = nflreadpy.load_snap_counts(seasons).to_pandas()
+    df = normalize_team_codes(df, SNAP_TEAM_COLS)
+    if save:
+        df.to_parquet(RAW_DIR / f"snap_counts_{_seasons_label(seasons)}.parquet")
+    return df
+
+
+def load_pfr_advstats(
+    seasons: list[int], stat_type: str, save: bool = True
+) -> pd.DataFrame:
+    """Weekly Pro Football Reference advanced statistics."""
+    if stat_type not in PFR_STAT_TYPES:
+        raise ValueError(f"stat_type must be one of {PFR_STAT_TYPES}, got {stat_type!r}")
+    df = nflreadpy.load_pfr_advstats(seasons, stat_type, "week").to_pandas()
+    df = normalize_team_codes(df, PFR_TEAM_COLS)
+    if save:
+        df.to_parquet(RAW_DIR / f"pfr_{stat_type}_{_seasons_label(seasons)}.parquet")
+    return df
+
+
+def load_ftn_charting(seasons: list[int], save: bool = True) -> pd.DataFrame:
+    """FTN charting data, available from the 2022 season onward."""
+    df = nflreadpy.load_ftn_charting(seasons).to_pandas()
+    if save:
+        df.to_parquet(RAW_DIR / f"ftn_charting_{_seasons_label(seasons)}.parquet")
+    return df
