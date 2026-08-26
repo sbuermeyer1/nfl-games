@@ -111,6 +111,65 @@ def feature_fixture_for_schedule(schedules):
     return pd.DataFrame(rows)
 
 
+def team_games_fixture(schedules, weeks):
+    rows = []
+    for game in schedules.itertuples():
+        if game.week not in weeks:
+            continue
+        for team in (game.away_team, game.home_team):
+            rows.append(
+                {
+                    "game_id": game.game_id,
+                    "season": game.season,
+                    "week": game.week,
+                    "team": team,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_refresh_raises_when_pbp_lags_the_schedules_feed(monkeypatch):
+    """The floor trusts the schedules release; the ratings come from the pbp release.
+
+    If pbp has not caught up, week 3's ratings would be built without week 2 and the
+    4-day publication lock would freeze that stale prediction permanently.
+    """
+    historical = historical_feature_fixture()
+    # weeks 1 and 2 final, week 3+ unplayed -> floor is 3
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2, 3), completed=(1, 2))
+    # team_games covers week 1 only -> week 2 missing
+    team_games = team_games_fixture(schedule, weeks=(1,))
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("ratings must not be built when pbp lags the schedules feed")
+
+    monkeypatch.setattr("nfl_game.pipeline.refresh_2026.ratings_for_targets", unexpected_call)
+    monkeypatch.setattr("nfl_game.pipeline.refresh_2026.build_game_features", unexpected_call)
+
+    with pytest.raises(ValueError, match="play-by-play does not cover"):
+        build_refresh_artifacts(historical, schedule, team_games, pd.DataFrame(), NOW)
+
+
+def test_refresh_does_not_raise_when_pbp_covers_prior_weeks(monkeypatch):
+    """Companion to the lag test: complete pbp coverage must not be flagged as missing."""
+    historical = historical_feature_fixture()
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2, 3), completed=(1, 2))
+    team_games = team_games_fixture(schedule, weeks=(1, 2))
+
+    monkeypatch.setattr(
+        "nfl_game.pipeline.refresh_2026.ratings_for_targets",
+        lambda team_games, targets: rating_fixture(targets),
+    )
+    monkeypatch.setattr(
+        "nfl_game.pipeline.refresh_2026.build_game_features",
+        lambda schedules, ratings, ngs: feature_fixture_for_schedule(schedules),
+    )
+
+    result = build_refresh_artifacts(historical, schedule, team_games, pd.DataFrame(), NOW)
+
+    assert sorted(result.features.query("season == 2026")["week"].unique()) == [3]
+
+
 def test_refresh_preserves_historical_rows_byte_for_value_and_adds_only_active_2026_weeks(
     monkeypatch,
 ):
