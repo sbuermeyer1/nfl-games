@@ -30,6 +30,17 @@ def schedule_inside_publish_window():
     return row
 
 
+def schedule_with_unpublished_game_above_the_floor():
+    floor_game = schedule_inside_publish_window()
+    full = pd.read_parquet(PROJECT_ROOT / "data/processed/schedule_2026.parquet")
+    above_floor = full.loc[full["game_id"].eq("2026_02_DET_BUF")].iloc[[0]].copy()
+    above_floor["gameday"] = "2026-09-06"
+    above_floor["gametime"] = "16:00"
+    above_floor["result"] = pd.NA
+    above_floor["total"] = pd.NA
+    return pd.concat([floor_game, above_floor], ignore_index=True)
+
+
 def write_artifacts(tmp_path):
     feature_path = tmp_path / "game_features.parquet"
     ledger_path = tmp_path / "tracker_ledger.parquet"
@@ -83,12 +94,34 @@ def test_default_dry_run_reports_change_without_writing(tmp_path, monkeypatch, c
     summary = json.loads(capsys.readouterr().out)
     assert summary == {
         "changed": True,
+        "first_publishable_week": 1,
+        "floor_blocked_games": 0,
         "historical_records": 1359,
         "live_records": 1,
         "mode": "dry-run",
         "new_live_records": 1,
         "voided_records": 0,
     }
+
+
+def test_dry_run_reports_floor_blocked_games_when_a_later_week_is_held_back(
+    tmp_path, monkeypatch, capsys
+):
+    """Companion to the zero-blocked default case: an always-return-1 implementation
+    would still pass that case, so this one needs a real blocked game to catch it."""
+    write_artifacts(tmp_path)
+
+    result, _ = run_cli(
+        tmp_path,
+        "--dry-run",
+        monkeypatch=monkeypatch,
+        schedule=schedule_with_unpublished_game_above_the_floor(),
+    )
+
+    assert result == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["first_publishable_week"] == 1
+    assert summary["floor_blocked_games"] == 1
 
 
 def test_write_combines_unchanged_history_with_valid_live_rows(tmp_path, monkeypatch):
@@ -304,3 +337,154 @@ def test_nonexact_ledger_schema_is_rejected_without_writing(tmp_path, monkeypatc
         run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
 
     assert ledger_path.read_bytes() == original
+
+
+def test_first_publishable_week_is_the_minimum_week_for_the_season():
+    features = pd.DataFrame(
+        [
+            {"game_id": "2025_18_AAA_BBB", "season": 2025, "week": 18},
+            {"game_id": "2026_03_AAA_BBB", "season": 2026, "week": 3},
+            {"game_id": "2026_04_AAA_BBB", "season": 2026, "week": 4},
+        ]
+    )
+
+    assert update_live_tracker._first_publishable_week(features, 2026) == 3
+
+
+def test_first_publishable_week_is_none_when_the_season_has_no_rows():
+    features = pd.DataFrame([{"game_id": "2025_18_AAA_BBB", "season": 2025, "week": 18}])
+
+    assert update_live_tracker._first_publishable_week(features, 2026) is None
+
+
+def test_first_publishable_week_raises_on_a_null_week():
+    """weeks.min() skips NaN, so a null-week row that IS the floor game would
+    silently promote the floor to the next week -- which is the stale one."""
+    features = pd.DataFrame(
+        [
+            {"game_id": "2026_03_AAA_BBB", "season": 2026, "week": None},
+            {"game_id": "2026_04_CCC_DDD", "season": 2026, "week": 4},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="null week"):
+        update_live_tracker._first_publishable_week(features, 2026)
+
+
+def test_select_schedule_excludes_weeks_above_the_floor():
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_03_AAA_BBB",
+                "week": 3,
+                "kickoff_at": now + pd.Timedelta(hours=12),
+            },
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(hours=13),
+            },
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    selected = update_live_tracker._select_schedule(schedule, live, now, 3)
+
+    assert selected["game_id"].tolist() == ["2026_03_AAA_BBB"]
+
+
+def test_select_schedule_keeps_existing_records_above_the_floor():
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(hours=13),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": ["2026_04_CCC_DDD"]})
+
+    selected = update_live_tracker._select_schedule(schedule, live, now, 3)
+
+    assert selected["game_id"].tolist() == ["2026_04_CCC_DDD"]
+
+
+def test_select_schedule_publishes_nothing_when_the_floor_is_none():
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_03_AAA_BBB",
+                "week": 3,
+                "kickoff_at": now + pd.Timedelta(hours=12),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    selected = update_live_tracker._select_schedule(schedule, live, now, None)
+
+    assert selected.empty
+
+
+def test_floor_blocked_count_excludes_games_far_outside_the_publish_window():
+    """A deleted in_window conjunct would count the whole remaining season instead
+    of just the games the window would otherwise take."""
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(days=30),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    blocked = update_live_tracker._floor_blocked_count(schedule, live, now, 3)
+
+    assert blocked == 0
+
+
+def test_floor_blocked_count_excludes_games_already_published():
+    """A deleted unpublished conjunct would keep counting already-published games in
+    other weeks, so the count would never return to 0 once the floor advances."""
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(hours=13),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": ["2026_04_CCC_DDD"]})
+
+    blocked = update_live_tracker._floor_blocked_count(schedule, live, now, 3)
+
+    assert blocked == 0
+
+
+def test_floor_blocked_count_counts_everything_in_window_when_the_floor_is_none():
+    """With no publishable week at all, every in-window unpublished game is blocked --
+    there is no week to compare against."""
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_03_AAA_BBB",
+                "week": 3,
+                "kickoff_at": now + pd.Timedelta(hours=12),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    blocked = update_live_tracker._floor_blocked_count(schedule, live, now, None)
+
+    assert blocked == 1

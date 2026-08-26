@@ -205,11 +205,64 @@ def _validate_feature_schedule_identity(features: pd.DataFrame, schedule: pd.Dat
         raise ValueError("feature identity does not match schedule")
 
 
-def _select_schedule(schedule: pd.DataFrame, live: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
+def _first_publishable_week(features: pd.DataFrame, season: int) -> int | None:
+    """The earliest week whose features were built from a complete prior week.
+
+    refresh_2026 appends only `active_prediction_weeks` -- the first two unplayed
+    weeks -- so the minimum week present for the season is the one whose predecessors
+    were all final at build time. The week after it was built without the current
+    week's results, so publishing from it would freeze a stale prediction.
+    """
+    weeks = features.loc[features["season"].eq(season), "week"]
+    if weeks.empty:
+        return None
+    if weeks.isna().any():
+        raise ValueError(
+            f"features for season {season} contain {int(weeks.isna().sum())} null week "
+            "value(s); the publication floor cannot be derived safely"
+        )
+    return int(weeks.min())
+
+
+def _select_schedule(
+    schedule: pd.DataFrame,
+    live: pd.DataFrame,
+    now: pd.Timestamp,
+    first_publishable_week: int | None,
+) -> pd.DataFrame:
     existing_ids = set(live["game_id"].astype(str))
-    eligible = schedule["kickoff_at"].le(now + PUBLISH_BEFORE)
+    if first_publishable_week is None:
+        eligible = pd.Series(False, index=schedule.index)
+    else:
+        eligible = schedule["kickoff_at"].le(now + PUBLISH_BEFORE) & schedule["week"].astype(
+            int
+        ).eq(int(first_publishable_week))
     existing = schedule["game_id"].astype(str).isin(existing_ids)
     return schedule.loc[eligible | existing].copy()
+
+
+def _floor_blocked_count(
+    schedule: pd.DataFrame,
+    live: pd.DataFrame,
+    now: pd.Timestamp,
+    first_publishable_week: int | None,
+) -> int:
+    """Games the publication window would take but the vintage floor is holding back.
+
+    A value that stays nonzero across days means the floor is stuck -- typically a game
+    whose result never arrived, which pins active_prediction_weeks permanently. Without
+    this the stoppage is indistinguishable from an ordinary quiet run.
+    """
+    existing_ids = set(live["game_id"].astype(str))
+    in_window = schedule["kickoff_at"].le(now + PUBLISH_BEFORE)
+    unpublished = ~schedule["game_id"].astype(str).isin(existing_ids)
+    if first_publishable_week is None:
+        blocked = in_window & unpublished
+    else:
+        blocked = (
+            in_window & unpublished & schedule["week"].astype(int).ne(int(first_publishable_week))
+        )
+    return int(blocked.sum())
 
 
 def _new_predictions(
@@ -304,6 +357,7 @@ def main(argv=None, loader=None, now=None) -> int:
 
     features = pd.read_parquet(args.features)
     service = SlateService(features)
+    first_publishable_week = _first_publishable_week(features, args.season)
     ledger = _load_ledger(args.ledger)
     historical = ledger.loc[ledger["record_type"].eq("backtest")].copy()
     existing_live = ledger.loc[ledger["record_type"].eq("live")].copy()
@@ -314,13 +368,15 @@ def main(argv=None, loader=None, now=None) -> int:
     raw_schedule = schedule_loader([args.season], save=False)
     schedule = normalize_schedule(raw_schedule, args.season)
     _validate_current_schedule(schedule)
-    selected_schedule = _select_schedule(schedule, existing_live, current)
+    selected_schedule = _select_schedule(schedule, existing_live, current, first_publishable_week)
+    floor_blocked = _floor_blocked_count(schedule, existing_live, current, first_publishable_week)
     predictions = _new_predictions(service, features, selected_schedule, existing_live, args.season)
     advanced_live = advance_live_ledger(
         existing_live,
         selected_schedule,
         predictions,
         current,
+        first_publishable_week=first_publishable_week,
     )
 
     combined = (
@@ -345,6 +401,8 @@ def main(argv=None, loader=None, now=None) -> int:
 
     summary = {
         "changed": changed,
+        "first_publishable_week": first_publishable_week,
+        "floor_blocked_games": floor_blocked,
         "historical_records": len(historical),
         "live_records": len(advanced_live),
         "mode": "write" if args.write else "dry-run",

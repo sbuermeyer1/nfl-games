@@ -185,8 +185,13 @@ changed. `--now` accepts a timezone-aware UTC lifecycle time for an audited manu
 
 Publication and grading rules are immutable once a game is recorded:
 
-- A Ridge `ridge-v1` prediction becomes eligible 24 hours before kickoff. Its model
-  margin, model total, model version, publication time, and original kickoff are frozen.
+- A Ridge `ridge-v1` prediction becomes eligible for publication under the lead-time rule
+  below. Its model margin, model total, model version, publication time, and original
+  kickoff are frozen.
+- Picks lock **4 days before kickoff**, floored so that no game is published until the
+  features artifact has been rebuilt from a complete prior week. In practice the Sunday
+  and Monday slate gets the full 4 days; Thursday games and Thanksgiving are held by the
+  floor at roughly 2.3–2.6 days.
 - Spread and total publish independently. An available line is frozen with its observation
   time. A missing line remains pending until one hour before kickoff, then becomes excluded
   with `missing_line_at_deadline`; a record first seen after that deadline is excluded with
