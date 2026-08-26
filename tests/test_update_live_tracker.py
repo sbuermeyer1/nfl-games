@@ -304,3 +304,80 @@ def test_nonexact_ledger_schema_is_rejected_without_writing(tmp_path, monkeypatc
         run_cli(tmp_path, "--write", monkeypatch=monkeypatch)
 
     assert ledger_path.read_bytes() == original
+
+
+def test_first_publishable_week_is_the_minimum_week_for_the_season():
+    features = pd.DataFrame(
+        [
+            {"game_id": "2025_18_AAA_BBB", "season": 2025, "week": 18},
+            {"game_id": "2026_03_AAA_BBB", "season": 2026, "week": 3},
+            {"game_id": "2026_04_AAA_BBB", "season": 2026, "week": 4},
+        ]
+    )
+
+    assert update_live_tracker._first_publishable_week(features, 2026) == 3
+
+
+def test_first_publishable_week_is_none_when_the_season_has_no_rows():
+    features = pd.DataFrame([{"game_id": "2025_18_AAA_BBB", "season": 2025, "week": 18}])
+
+    assert update_live_tracker._first_publishable_week(features, 2026) is None
+
+
+def test_select_schedule_excludes_weeks_above_the_floor():
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_03_AAA_BBB",
+                "week": 3,
+                "kickoff_at": now + pd.Timedelta(hours=12),
+            },
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(hours=13),
+            },
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    selected = update_live_tracker._select_schedule(schedule, live, now, 3)
+
+    assert selected["game_id"].tolist() == ["2026_03_AAA_BBB"]
+
+
+def test_select_schedule_keeps_existing_records_above_the_floor():
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(hours=13),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": ["2026_04_CCC_DDD"]})
+
+    selected = update_live_tracker._select_schedule(schedule, live, now, 3)
+
+    assert selected["game_id"].tolist() == ["2026_04_CCC_DDD"]
+
+
+def test_select_schedule_publishes_nothing_when_the_floor_is_none():
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_03_AAA_BBB",
+                "week": 3,
+                "kickoff_at": now + pd.Timedelta(hours=12),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    selected = update_live_tracker._select_schedule(schedule, live, now, None)
+
+    assert selected.empty
