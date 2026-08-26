@@ -58,6 +58,17 @@ four research artifacts (`ridge_v2_outer_predictions.parquet`, `ridge_v2_evaluat
 Ridge-v1 destination is refused. `--require-research-gates` makes a failed gate exit
 nonzero; without it the run reports and exits 0.
 
+### FTN charting (E1, research only)
+
+    .\.venv\Scripts\python.exe scripts\backtest_v2_ftn.py --dry-run
+
+FTN charting begins in 2022, which is too short a history for the production candidate, so
+this is a separate experiment that cannot promote anything. It compares two arms trained on
+identical rows -- the C0 core schema, and that schema plus the FTN features -- for each outer
+season the 2022+ history supports (2023-2025). It refuses to write over any Ridge-v1 or
+Task 13-17 artifact, defaults to dry-run, and takes about a minute once the sources are
+cached. **Result: FTN did not help** -- see CLAUDE.md.
+
 ## Web dashboard operations
 
 The dashboard serves three checked-in artifacts:

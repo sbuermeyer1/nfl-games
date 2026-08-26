@@ -112,6 +112,29 @@ would change the manifest the experiment exists to measure. Those rows are recor
 `not_constructible` with the exact error rather than dropped. Ablations therefore exist only
 for 2019-2020; the C0 seasons have no blocks to remove.
 
+### FTN charting (E1) was measured separately and REJECTED
+
+Run 2026-08-25. FTN begins in 2022, so only 2023-2025 have a prior charting season to train
+on. Two arms trained on identical rows -- C0 alone versus C0 plus the FTN block:
+
+| season | margin (core -> E1) | total (core -> E1) |
+| --- | --- | --- |
+| 2023 | 10.8592 -> 11.0589 | 10.7244 -> 10.5001 |
+| 2024 | 10.3020 -> 10.4323 | 10.4293 -> 10.8638 |
+| 2025 | 10.3356 -> 10.4002 | 10.5337 -> 10.5037 |
+
+Pooled, FTN costs **-0.1315** MAE on margin (worse in 3 of 3 seasons) and **-0.0601** on total
+(better in 2 of 3, but 2024 loses 0.43). Nothing here justifies adding charting to the model,
+and it is consistent with the core result that no v2 block earned selection.
+
+**Two live-schema facts about this feed, both measured before the code was written.** The FTN
+table has **no team column** -- it carries `nflverse_game_id`/`nflverse_play_id` only, so
+offence comes from a play-by-play join on `posteam`; 100% of charted plays join, across
+2022-2025. And **`date_pulled` is not an availability time**: it is the archive's snapshot
+stamp, with 2022 rows carrying 2024 dates, so the as-of rule is week ordering like every other
+block. Live coverage is 2,278 charted team-games, 32 teams per season, 73-81 charted plays per
+team-game.
+
 ## Data sourcing
 
 All data comes from `nflreadpy`. No API key, no scraping. `load_schedules()` carries the
