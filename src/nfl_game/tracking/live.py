@@ -210,9 +210,18 @@ def advance_live_ledger(
     schedule,
     predictions,
     now,
+    *,
+    first_publishable_week,
     model_version=HISTORICAL_MODEL_VERSION,
 ):
-    """Advance live facts without mutating any caller-owned frame."""
+    """Advance live facts without mutating any caller-owned frame.
+
+    `first_publishable_week` is the earliest week whose features were built from a
+    complete prior week -- the minimum week present in the features artifact for the
+    tracked season. A new record is created only for that week; None publishes nothing.
+    Records that already exist always advance, regardless of the floor, so they can
+    still capture closing lines and finalize.
+    """
     now = _utc_timestamp(now, "now")
     schedule_rows = {
         str(row.game_id): row._asdict() for row in schedule.copy(deep=True).itertuples(index=False)
@@ -233,6 +242,10 @@ def advance_live_ledger(
         record = records.pop(game_id, None)
         if record is None:
             if now < kickoff - PUBLISH_BEFORE:
+                continue
+            if first_publishable_week is None:
+                continue
+            if int(game["week"]) != int(first_publishable_week):
                 continue
             prediction = prediction_rows.get(game_id)
             if prediction is None:

@@ -109,3 +109,37 @@ def test_normalize_schedule_rejects_duplicate_ids_and_invalid_lines():
     invalid.loc[0, "spread_line"] = float("inf")
     with pytest.raises(ScheduleSchemaError, match="spread_line"):
         normalize_schedule(invalid, 2026)
+
+
+def test_first_active_week_has_every_prior_week_final():
+    """The vintage floor in advance_live_ledger depends on this property.
+
+    If active_prediction_weeks ever stops returning a prefix of the unplayed weeks,
+    the minimum week in the features artifact stops implying that its predecessors
+    were complete at build time, and the floor silently admits stale predictions.
+    """
+    now = pd.Timestamp("2026-10-01T12:00:00Z")
+    rows = []
+    for week in range(1, 6):
+        kickoff = pd.Timestamp("2026-09-06T17:00:00Z") + pd.Timedelta(weeks=week - 1)
+        played = kickoff + pd.Timedelta(hours=6) <= now
+        rows.append(
+            {
+                "game_id": f"2026_{week:02d}_AAA_BBB",
+                "season": 2026,
+                "week": week,
+                "away_team": "AAA",
+                "home_team": "BBB",
+                "kickoff_at": kickoff,
+                "result": 3.0 if played else np.nan,
+                "total": 44.0 if played else np.nan,
+            }
+        )
+    schedule = pd.DataFrame(rows)
+
+    weeks = active_prediction_weeks(schedule, now)
+    first = min(weeks)
+    prior = schedule.loc[schedule["week"] < first]
+
+    assert not prior.empty, "fixture must contain at least one completed week"
+    assert all(is_final_game(row, now) for _, row in prior.iterrows())
