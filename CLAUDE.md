@@ -82,6 +82,36 @@ hashed -- `retrieved_at` records when we fetched, `latest_event_at` is a propert
 data itself. `_validate_artifacts` recomputes the digests from the stored manifest, which
 makes it an internal integrity check against a tampered file, not a cross-run signal.
 
+### The Ridge-v2 experiment result: the challenger TIES Ridge v1 exactly
+
+Run 2026-08-25 on the locked artifact. **Gates 3, 4, 5, 6 and 9 FAIL, so Ridge v1 remains
+official** and nothing about the shipped model, tracker or website changes.
+
+**The headline is in the selections, not the gate table.** The nested selection chose **C0 --
+the exact Ridge-v1 schema -- for both targets in all five evaluation seasons**, so the
+challenger reproduces the champion: all **1,359 outer predictions are bit-identical** to
+Ridge v1 (max absolute difference 0.0), and margin MAE agrees to full float precision at
+10.273977625706554. Per-season improvement is exactly 0.0000 in every season. None of the
+Ridge-v2 blocks -- ratings, quarterback, style, personnel continuity, PFR -- earned selection
+in a single evaluation season. Only the 2019 and 2020 calibration seeds picked non-C0
+configurations (C4/C1), on two or three seasons of training data, with an inner margin MAE
+of 25.0 and 20.3: overfitting, not signal.
+
+**Do not read gates 1 and 2 as evidence of improvement.** They test `< 10.274` and `< 10.684`
+-- the *rounded* literals from the recorded baseline -- so a challenger that is bit-identical
+to the champion passes them by 2.2e-05 and 1.8e-04. Those two gates cannot distinguish a tie
+from a win. Gate 9 (Brier) fails by 0.0001 *despite* identical point predictions, because the
+v2 calibrator is seeded on 2019-2020 where the selection did pick C4/C1. Gate 6 fails on the
+margin side only (coefficient -0.0218, the Ridge-v1 value); the total side passes at +0.2924.
+
+**The C1 rating block cannot be ablated**, measured on live data: removing it raises
+`rating variant maps canonical column(s) outside the target schema` for margin and
+`total_points/C1 has no rating-variant canonical columns` for the total. The rating-variant
+contract requires a non-C0 schema to declare its canonical rating columns, and relaxing that
+would change the manifest the experiment exists to measure. Those rows are recorded as
+`not_constructible` with the exact error rather than dropped. Ablations therefore exist only
+for 2019-2020; the C0 seasons have no blocks to remove.
+
 ## Data sourcing
 
 All data comes from `nflreadpy`. No API key, no scraping. `load_schedules()` carries the

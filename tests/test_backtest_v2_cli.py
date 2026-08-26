@@ -196,7 +196,12 @@ def test_write_publishes_all_four_research_artifacts(tmp_path):
     ]
     predictions = pd.read_parquet(tmp_path / "ridge_v2_outer_predictions.parquet")
     assert set(predictions["season"]) == set(REPORT_SEASONS)
-    assert {"cover_prob", "over_prob"}.issubset(predictions.columns)
+    # The exact contract, in order: no feature columns ride along into this artifact.
+    assert list(predictions.columns) == [
+        *backtest_v2.PREDICTION_COLUMNS,
+        "cover_prob",
+        "over_prob",
+    ]
     evaluation = json.loads((tmp_path / "ridge_v2_evaluation.json").read_text(encoding="utf-8"))
     assert evaluation["report"]["margin_mae"] == 9.5
     assert evaluation["gates"]["1"]["status"] == "PASS"

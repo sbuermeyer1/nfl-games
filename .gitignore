@@ -24,3 +24,9 @@ data/processed/*
 # parquet is deliberately NOT negated -- it is 7.3 MB against v1's 251 KB and would be
 # re-added whole on every rebuild. Regenerate it with scripts/build_v2_dataset.py --write.
 !data/processed/ridge_v2_manifest.json
+
+# The four Ridge-v2 research artifacts: the experiment's record, ~106 KB in total.
+!data/processed/ridge_v2_outer_predictions.parquet
+!data/processed/ridge_v2_evaluation.json
+!data/processed/ridge_v2_ablation.parquet
+!data/processed/ridge_v2_calibration.json

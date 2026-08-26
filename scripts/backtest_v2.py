@@ -83,6 +83,20 @@ GATE_SPECS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
 )
 SHADOW_GATE = (11, "shadow production rebuild leaves Ridge-v1 unchanged")
 
+# What the outer-predictions artifact carries: the paired-evaluation contract plus the
+# calibrated probabilities, and nothing else.
+PREDICTION_COLUMNS = (
+    "game_id",
+    "season",
+    "week",
+    "margin",
+    "total_points",
+    "spread_line",
+    "total_line",
+    "model_margin",
+    "model_total",
+)
+
 # Structural evidence the gates are computed from. These are not numbered gates, but a
 # missing or inconsistent value here makes every metric gate unreadable, so they are printed.
 EVIDENCE_LABELS = ("outer season evidence", "game count evidence")
@@ -517,8 +531,13 @@ def build_experiment_artifacts(
     manifest_payload: Mapping[str, object] | None,
 ) -> ExperimentArtifacts:
     """Assemble the four research payloads without writing anything."""
-    report_rows = predictions.loc[predictions["season"].isin(REPORT_SEASONS)].copy()
-    merged = report_rows.merge(probabilities, on="game_id", how="left", validate="one_to_one")
+    # The prediction contract only -- not the 300-odd feature columns the nested backtest
+    # carries alongside them. Those live in the feature artifact and rejoin on game_id;
+    # copying them here would make this artifact a second, divergible copy of the corpus.
+    report_rows = predictions.loc[predictions["season"].isin(REPORT_SEASONS), PREDICTION_COLUMNS]
+    merged = report_rows.copy().merge(
+        probabilities, on="game_id", how="left", validate="one_to_one"
+    )
 
     selection_records = [
         {

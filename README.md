@@ -45,6 +45,19 @@ three packaged v1 artifacts are left byte-identical.
 Only the manifest is committed. The feature parquet is gitignored and rebuilt from source,
 so a fresh clone must run `--write` before anything can read it.
 
+The locked research experiment runs on top of that artifact:
+
+    .\.venv\Scripts\python.exe scripts\backtest_v2.py --dry-run
+    .\.venv\Scripts\python.exe scripts\backtest_v2.py --write
+
+It reproduces Ridge v1 over 2019-2025, runs the Ridge-v2 nested walk-forward over the same
+span, evaluates promotion on the identical 2021-2025 rows, and prints promotion gates 1-10
+with gate 11 pending. It takes about 22 minutes, defaults to dry-run, and writes only the
+four research artifacts (`ridge_v2_outer_predictions.parquet`, `ridge_v2_evaluation.json`,
+`ridge_v2_ablation.parquet`, `ridge_v2_calibration.json`) -- all four are committed, and a
+Ridge-v1 destination is refused. `--require-research-gates` makes a failed gate exit
+nonzero; without it the run reports and exits 0.
+
 ## Web dashboard operations
 
 The dashboard serves three checked-in artifacts:
