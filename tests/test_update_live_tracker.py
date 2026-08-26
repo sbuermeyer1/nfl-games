@@ -428,3 +428,63 @@ def test_select_schedule_publishes_nothing_when_the_floor_is_none():
     selected = update_live_tracker._select_schedule(schedule, live, now, None)
 
     assert selected.empty
+
+
+def test_floor_blocked_count_excludes_games_far_outside_the_publish_window():
+    """A deleted in_window conjunct would count the whole remaining season instead
+    of just the games the window would otherwise take."""
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(days=30),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    blocked = update_live_tracker._floor_blocked_count(schedule, live, now, 3)
+
+    assert blocked == 0
+
+
+def test_floor_blocked_count_excludes_games_already_published():
+    """A deleted unpublished conjunct would keep counting already-published games in
+    other weeks, so the count would never return to 0 once the floor advances."""
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_04_CCC_DDD",
+                "week": 4,
+                "kickoff_at": now + pd.Timedelta(hours=13),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": ["2026_04_CCC_DDD"]})
+
+    blocked = update_live_tracker._floor_blocked_count(schedule, live, now, 3)
+
+    assert blocked == 0
+
+
+def test_floor_blocked_count_counts_everything_in_window_when_the_floor_is_none():
+    """With no publishable week at all, every in-window unpublished game is blocked --
+    there is no week to compare against."""
+    now = pd.Timestamp("2026-09-20T12:00:00Z")
+    schedule = pd.DataFrame(
+        [
+            {
+                "game_id": "2026_03_AAA_BBB",
+                "week": 3,
+                "kickoff_at": now + pd.Timedelta(hours=12),
+            }
+        ]
+    )
+    live = pd.DataFrame({"game_id": pd.Series(dtype=str)})
+
+    blocked = update_live_tracker._floor_blocked_count(schedule, live, now, None)
+
+    assert blocked == 1

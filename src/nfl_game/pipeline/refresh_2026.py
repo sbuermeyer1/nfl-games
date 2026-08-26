@@ -39,7 +39,8 @@ def _cast_live_like_history(live: pd.DataFrame, historical: pd.DataFrame) -> pd.
 def _assert_pbp_covers_prior_weeks(
     schedules: pd.DataFrame, team_games: pd.DataFrame, floor_week: int
 ) -> None:
-    """Raise unless play-by-play covers every 2026 game before the publication floor.
+    """Raise unless every 2026 game before the publication floor has a game_id
+    present in team_games (i.e. play-by-play was ingested for it).
 
     `active_prediction_weeks` reads result/total from the SCHEDULES release, but the
     ratings feeding these features come from load_pbp -- a SEPARATE nflverse release.
@@ -47,6 +48,10 @@ def _assert_pbp_covers_prior_weeks(
     without its predecessor. Under the 4-day publication lock the first refresh that
     advances the floor is also the publication trigger, so that gap would freeze a
     stale prediction permanently.
+
+    This checks game_id presence only -- it does not verify that the ratings inputs
+    for those games are non-null, so a partially-ingested play-by-play game would
+    still pass.
     """
     prior = schedules.loc[
         schedules["season"].eq(2026)
