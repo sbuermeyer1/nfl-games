@@ -146,6 +146,10 @@ Do not introduce reverse dependencies. Package ownership is strict:
 - For an official live record, model version, estimator, predictions, `published_at`, the
   original `kickoff_at`, every published/official line, and its observed time are frozen.
   A postponement may update only `current_kickoff_at` before finalization.
+- Picks lock **4 days before kickoff**, floored so that no game is published until the
+  features artifact has been rebuilt from a complete prior week. In practice the Sunday
+  and Monday slate gets the full 4 days; Thursday games and Thanksgiving are held by the
+  floor at roughly 2.3–2.6 days.
 - Spread and total publication states progress independently. Missing, excluded, push,
   closing-line, CLV, and void facts are explicit; none may be inferred by rewriting an
   earlier field.

@@ -78,8 +78,8 @@ def published_fixture(kickoff=NOW):
     )
 
 
-def test_publication_starts_at_exactly_24_hours_but_not_before():
-    kickoff = NOW + pd.Timedelta(hours=24)
+def test_publication_starts_at_exactly_four_days_but_not_before():
+    kickoff = NOW + pd.Timedelta(days=4)
 
     too_soon = advance(
         empty_live_ledger(),
@@ -99,7 +99,93 @@ def test_publication_starts_at_exactly_24_hours_but_not_before():
     assert boundary["game_id"].tolist() == [GAME_ID]
 
 
-def test_first_run_inside_24_hours_freezes_prediction_and_available_markets():
+def test_thursday_game_is_held_by_the_floor_not_the_four_day_mark():
+    """A week-3 Thursday kickoff sits 4 days after the week-2 Sunday slate.
+
+    The 4-day mark alone would publish it while week 2 was still being played, on
+    week-1 features. The floor is what holds it until the week-3 refresh.
+    """
+    kickoff = pd.Timestamp("2026-09-24T00:15:00Z")  # Thu 8:15pm ET
+    four_days_out = kickoff - pd.Timedelta(days=4)  # Sun, week 2 still in progress
+
+    held = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=3),
+        predictions_fixture(),
+        four_days_out,
+        first_publishable_week=2,
+    )
+    released = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=3),
+        predictions_fixture(),
+        four_days_out,
+        first_publishable_week=3,
+    )
+
+    assert held.empty
+    assert len(released) == 1
+
+
+def test_sunday_game_publishes_at_the_full_four_days():
+    kickoff = pd.Timestamp("2026-09-27T17:00:00Z")  # Sun 1:00pm ET
+
+    advanced = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=3),
+        predictions_fixture(),
+        kickoff - pd.Timedelta(days=4),
+        first_publishable_week=3,
+    )
+
+    assert len(advanced) == 1
+
+
+def test_friday_game_is_held_by_the_floor():
+    """The one Friday afternoon game on the 2025 calendar is floor-bound at ~3.4 days.
+
+    Its 4-day mark lands on the prior Monday, before the Tuesday refresh that folds in
+    the previous week. Kept as a distinct case because Friday football is rare enough
+    that a Thursday-only test would not cover it.
+    """
+    kickoff = pd.Timestamp("2026-09-25T19:00:00Z")  # Fri 3:00pm ET
+    four_days_out = kickoff - pd.Timedelta(days=4)  # Mon, week 2 not yet finalized
+
+    held = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=3),
+        predictions_fixture(),
+        four_days_out,
+        first_publishable_week=2,
+    )
+    released = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=3),
+        predictions_fixture(),
+        four_days_out,
+        first_publishable_week=3,
+    )
+
+    assert held.empty
+    assert len(released) == 1
+
+
+def test_week_one_publishes_at_four_days_with_a_vacuous_floor():
+    """Week 1 has no prior week, so the floor is satisfied by first_publishable_week=1."""
+    kickoff = pd.Timestamp("2026-09-13T17:00:00Z")
+
+    advanced = advance_live_ledger(
+        empty_live_ledger(),
+        schedule_fixture(kickoff, week=1),
+        predictions_fixture(),
+        kickoff - pd.Timedelta(days=4),
+        first_publishable_week=1,
+    )
+
+    assert len(advanced) == 1
+
+
+def test_first_run_inside_the_window_freezes_prediction_and_available_markets():
     kickoff = NOW + pd.Timedelta(hours=23)
 
     out = advance(
@@ -279,9 +365,7 @@ def test_repeated_calls_are_idempotent_and_never_mutate_callers():
 
 def test_changed_predictions_cannot_change_frozen_model_facts():
     kickoff = NOW + pd.Timedelta(hours=23)
-    first = advance(
-        empty_live_ledger(), schedule_fixture(kickoff), predictions_fixture(), NOW
-    )
+    first = advance(empty_live_ledger(), schedule_fixture(kickoff), predictions_fixture(), NOW)
 
     later = advance(
         first,

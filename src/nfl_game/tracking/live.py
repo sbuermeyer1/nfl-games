@@ -13,7 +13,7 @@ from nfl_game.tracking.ledger import (
     validate_ledger,
 )
 
-PUBLISH_BEFORE = pd.Timedelta(hours=24)
+PUBLISH_BEFORE = pd.Timedelta(days=4)
 LINE_DEADLINE = pd.Timedelta(hours=1)
 FINALIZATION_DELAY = pd.Timedelta(hours=6)
 FINAL_RETRY_LIMIT = pd.Timedelta(days=7)
