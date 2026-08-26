@@ -95,7 +95,39 @@ Ridge v1 (max absolute difference 0.0), and margin MAE agrees to full float prec
 Ridge-v2 blocks -- ratings, quarterback, style, personnel continuity, PFR -- earned selection
 in a single evaluation season. Only the 2019 and 2020 calibration seeds picked non-C0
 configurations (C4/C1), on two or three seasons of training data, with an inner margin MAE
-of 25.0 and 20.3: overfitting, not signal.
+of 25.0 and 20.3.
+
+> **CORRECTION (2026-08-26): the selection was not a fair test, so "no v2 block helps" is NOT
+> supported.** The sentences above describe what the selection *did*, and the tie itself is
+> real. What does not follow is the merit verdict — the blocks were never given an equal
+> comparison, and the earlier "overfitting, not signal" reading of 2019/2020 is part of what
+> is now in doubt.
+>
+> **Mechanism.** In `_inner_evaluations` (`src/nfl_game/experiments/v2_selection.py:337`) a
+> `DegenerateFeatureError` re-raises for every candidate *except* C0, which is allowed to
+> `continue` and silently drop that validation season. `mean_inner_mae`
+> (`v2_selection.py:118`) is then a plain `np.mean` over whatever seasons each config happens
+> to have. C0 is therefore scored on an easier season set than its challengers.
+>
+> **Evidence in the committed artifact.** In `data/processed/ridge_v2_evaluation.json` every
+> C0 selection (2021-2025) records `validation_seasons` beginning at **2019**, while the
+> non-C0 selections (2019, 2020) begin at **2017**. The 2017 and 2018 slices run MAE 17-25,
+> so C1-C5 carried two catastrophic folds that C0 never faced.
+>
+> **Rescored on C0's own season set, a richer candidate wins every fold checked**, by more
+> than the 0.05 tie-break tolerance:
+>
+> | fold | as run | on matched seasons |
+> | --- | --- | --- |
+> | 2021 margin | C0 10.5899 | **C2 10.4592** (C1, C3 also beat C0) |
+> | 2021 total | C0 10.9971 | **C2 10.8399** |
+> | 2025 margin | C0 10.3717 | **C3 10.2557** (C1, C2, C4 also beat) |
+> | 2025 total | C0 10.8276 | **C2 10.7762** |
+>
+> The 1,359 bit-identical predictions remain correct; only the conclusion drawn from them is
+> withdrawn. Whether the v2 features help is **unknown**, and settling it needs the selection
+> fixed to score every candidate on a common fold set, then a re-run (~22 min). Ridge v1
+> remains official either way — this correction promotes nothing.
 
 **Do not read gates 1 and 2 as evidence of improvement.** They test `< 10.274` and `< 10.684`
 -- the *rounded* literals from the recorded baseline -- so a challenger that is bit-identical
@@ -124,8 +156,13 @@ on. Two arms trained on identical rows -- C0 alone versus C0 plus the FTN block:
 | 2025 | 10.3356 -> 10.4002 | 10.5337 -> 10.5037 |
 
 Pooled, FTN costs **-0.1315** MAE on margin (worse in 3 of 3 seasons) and **-0.0601** on total
-(better in 2 of 3, but 2024 loses 0.43). Nothing here justifies adding charting to the model,
-and it is consistent with the core result that no v2 block earned selection.
+(better in 2 of 3, but 2024 loses 0.43). Nothing here justifies adding charting to the model.
+
+**The FTN result stands on its own; do not lean it on the core result.** An earlier version of
+this section called it "consistent with the core result that no v2 block earned selection" —
+that support is withdrawn per the correction above. E1 does not need it: these two arms were
+trained on *identical rows* and differ only by the FTN block, so it is a genuine paired
+comparison, unaffected by the unequal-fold defect in the nested selection.
 
 **Two live-schema facts about this feed, both measured before the code was written.** The FTN
 table has **no team column** -- it carries `nflverse_game_id`/`nflverse_play_id` only, so
@@ -246,8 +283,22 @@ leak rather than an edge — audit the as-of joins first. `market_comparison_reg
 the decisive test: if `model_coef` is near zero, the model adds nothing the closing line
 doesn't already contain.
 
-**The current result is that the model ties the market without beating it, and that is
-the success case, not a failure.** Do not "improve" it into an edge.
+**The current result is that the model ties the CLOSING line without beating it, and that is
+the success case, not a failure.** Do not "improve" it into an edge against the close.
+
+**But it does beat the EARLY line, and that is a different measurement.** Against the number
+posted ~4 days out, the model shows closing-line value of **+0.254 pts on spreads at edge >= 1
+(z = 4.30)** and **+0.267 at edge >= 2 (z = 3.68), positive in all five seasons**; totals are
+stronger still (edge >= 1 at z = 5.80). Measured over 1,178 joined and priced games by
+`scripts/analyze_line_value.py`, using line history reconstructed from the `nflverse/nfldata`
+git history. These two statements are consistent: the model anticipates part of the movement
+between the early number and the close, and none of what remains at the close.
+
+Do not evaluate this model by its ATS record. At ~141 qualified picks a season, demonstrating
+a true 54% needs roughly **27 seasons**; the closing-line ATS figures (0.4977 at 0+, 0.4752 at
+2+) are noise plus vig. CLV is continuous and resolved the same question at z > 4 on 1,178
+games. **1 spread point = 4.93% win probability** and break-even at -110 needs ~0.48 points,
+so +0.267 is about 55% of the way there — real, but not yet an edge on its own.
 
 ### Regression baseline
 
