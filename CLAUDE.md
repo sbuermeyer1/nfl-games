@@ -319,6 +319,32 @@ leave them untouched. If they move, stop and find out why before going further �
 the paragraph above before judging the direction, because a number that looks like an
 improvement is the one that most needs auditing.
 
+### Line shopping is worth more than the model
+
+Measured by `scripts/analyze_key_numbers.py` on the same 1,359-game corpus. **Getting half a
+point better than the number you bet changes 4.56% of outcomes and is worth +4.34% EV per bet
+at -110** — against the model's own ~1.32% (its +0.267 points of early-line value at
+4.93% per point). Half a point of shopping is roughly **3.3x the entire model edge**, costs
+nothing, and requires no modelling.
+
+The value is concentrated on one number, because NFL margins are not smooth:
+
+| number bet | bets | outcome changed | EV gain |
+| ---: | ---: | ---: | ---: |
+| **3.0** | 197 | **10.15%** | **+9.23%** |
+| 2.5 | 157 | 5.10% | +5.10% |
+| 3.5 | 141 | 4.26% | +4.26% |
+| 6.5 | 69 | 7.25% | +7.25% |
+
+**14.64% of games end on a 3-point margin** and 7.73% on 7. Buying off 3 is worth several
+times what it is worth anywhere else.
+
+Two cautions. **Book-to-book dispersion is NOT measured here** — nflverse carries a single
+consensus line and a multi-book feed is paid, so this quantifies what a better number is worth
+*if you can get it*, not how often books actually differ. And note the push arithmetic: **33 of
+1,359 games land exactly on the closing spread (2.43% overall, 5.45% of the 605 integer-spread
+lines)**; no half-point line can ever push.
+
 ### Tracker acceptance records
 
 The reviewed `ridge-v1` historical ledger covers 1,359 games in 2021–2025 and must
