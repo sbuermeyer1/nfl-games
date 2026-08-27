@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import shutil
 import tempfile
+import warnings
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +39,10 @@ def _cast_live_like_history(live: pd.DataFrame, historical: pd.DataFrame) -> pd.
 
 
 def _assert_pbp_covers_prior_weeks(
-    schedules: pd.DataFrame, team_games: pd.DataFrame, floor_week: int
+    schedules: pd.DataFrame,
+    team_games: pd.DataFrame,
+    floor_week: int,
+    allow_missing: Collection[str] = (),
 ) -> None:
     """Raise unless every 2026 game before the publication floor has a game_id
     present in team_games (i.e. play-by-play was ingested for it).
@@ -53,6 +58,14 @@ def _assert_pbp_covers_prior_weeks(
     This checks game_id presence only -- it does not verify that the ratings inputs
     for those games are non-null, so a partially-ingested play-by-play game would
     still pass.
+
+    `allow_missing` is the escape hatch. Fail-closed is right for a feed that is merely
+    LATE, but a game that never lands would otherwise halt every refresh for the rest of
+    the season and no prediction would publish again. It takes explicit game_ids rather
+    than a boolean because a blanket skip trades a loud permanent halt for a silent
+    permanent corruption: predictions frozen forever on ratings built without a week.
+    Naming ids keeps the next outage loud -- and a forgiven game still produces a
+    warning on every run, so the hatch cannot be left open quietly.
     """
     prior = schedules.loc[
         schedules["season"].eq(2026)
@@ -62,12 +75,36 @@ def _assert_pbp_covers_prior_weeks(
     if prior.empty:
         return
     covered = set(team_games.loc[team_games["season"].eq(2026), "game_id"].astype(str))
-    missing = sorted(set(prior["game_id"].astype(str)) - covered)
-    if missing:
+    allowed = {str(game_id) for game_id in allow_missing}
+    missing = set(prior["game_id"].astype(str)) - covered
+
+    forgiven = sorted(missing & allowed)
+    if forgiven:
+        warnings.warn(
+            f"proceeding without play-by-play for {len(forgiven)} allowlisted game(s) before "
+            f"the publication floor (week {floor_week}): {forgiven}. The ratings for that week "
+            f"are built WITHOUT these games, and the resulting predictions are frozen once "
+            f"published. Clear the allowlist as soon as the feed recovers.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    stale = sorted(allowed - missing)
+    if stale:
+        warnings.warn(
+            f"allowlisted game(s) no longer missing from play-by-play: {stale}. The feed has "
+            f"recovered; remove them from the allowlist. (Not an error -- raising here would "
+            f"reintroduce the season-long halt the allowlist exists to prevent.)",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    blocking = sorted(missing - allowed)
+    if blocking:
         raise ValueError(
-            f"play-by-play does not cover {len(missing)} game(s) before the publication "
+            f"play-by-play does not cover {len(blocking)} game(s) before the publication "
             f"floor (week {floor_week}): the schedules feed is ahead of the pbp feed. "
-            f"First missing: {missing[:5]}"
+            f"First missing: {blocking[:5]}"
         )
 
 
@@ -77,8 +114,14 @@ def build_refresh_artifacts(
     team_games: pd.DataFrame,
     ngs: pd.DataFrame,
     now: datetime,
+    allow_missing_pbp: Collection[str] = (),
 ) -> RefreshArtifacts:
-    """Preserve frozen history and append only the first two active 2026 weeks."""
+    """Preserve frozen history and append only the first two active 2026 weeks.
+
+    `allow_missing_pbp` forgives specific game_ids in the play-by-play coverage guard;
+    see `_assert_pbp_covers_prior_weeks`. It defaults to empty, so the guard is
+    fail-closed unless an operator opts out for named games.
+    """
     weeks = active_prediction_weeks(schedules, now)
     targets = [(2026, week) for week in weeks]
     historical = historical_features.loc[historical_features["season"] <= 2025].copy()
@@ -86,7 +129,7 @@ def build_refresh_artifacts(
     if not targets:
         return RefreshArtifacts(historical, schedules.copy())
 
-    _assert_pbp_covers_prior_weeks(schedules, team_games, min(weeks))
+    _assert_pbp_covers_prior_weeks(schedules, team_games, min(weeks), allow_missing_pbp)
     ratings = ratings_for_targets(team_games, targets)
     target_schedule = schedules.loc[schedules["season"].eq(2026) & schedules["week"].isin(weeks)]
     live = build_game_features(target_schedule, ratings, ngs)
