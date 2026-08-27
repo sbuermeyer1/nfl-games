@@ -504,3 +504,187 @@ def test_cli_requests_2026_pbp_and_ngs_only_after_a_regular_season_game_is_final
     pd.testing.assert_frame_equal(captured["ngs"], refresh_cli.empty_ngs_frame())
     assert "spread_line" not in FEATURE_COLS
     assert "total_line" not in FEATURE_COLS
+
+
+# --- the pbp-coverage escape hatch -------------------------------------------------
+#
+# The guard above is fail-closed by design, but it has no way out: a play-by-play game
+# that NEVER lands halts every refresh for the rest of the season, so no prediction ever
+# publishes again. The escape hatch is an explicit allowlist of game_ids rather than a
+# boolean skip -- a blanket skip would trade a loud permanent halt for a silent permanent
+# corruption, publishing frozen predictions built on ratings that are missing a week.
+
+
+def _ratings_built(monkeypatch):
+    """Let ratings/features run, recording that they were reached."""
+    reached = []
+    monkeypatch.setattr(
+        "nfl_game.pipeline.refresh_2026.ratings_for_targets",
+        lambda team_games, targets: reached.append(targets) or rating_fixture(targets),
+    )
+    monkeypatch.setattr(
+        "nfl_game.pipeline.refresh_2026.build_game_features",
+        lambda schedules, ratings, ngs: feature_fixture_for_schedule(schedules),
+    )
+    return reached
+
+
+def test_an_allowlisted_missing_game_lets_the_refresh_proceed(monkeypatch):
+    historical = historical_feature_fixture()
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2, 3), completed=(1, 2))
+    team_games = team_games_fixture(schedule, weeks=(1,))  # week 2 never landed
+    reached = _ratings_built(monkeypatch)
+
+    with pytest.warns(RuntimeWarning, match="2026_02_AAA_BBB"):
+        result = build_refresh_artifacts(
+            historical,
+            schedule,
+            team_games,
+            pd.DataFrame(),
+            NOW,
+            allow_missing_pbp={"2026_02_AAA_BBB"},
+        )
+
+    assert reached, "ratings must be built once the missing game is forgiven"
+    assert sorted(result.features.query("season == 2026")["week"].unique()) == [3]
+
+
+def test_a_missing_game_outside_the_allowlist_still_raises(monkeypatch):
+    """Forgiving one game must not forgive the next outage."""
+    historical = historical_feature_fixture()
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2, 3), completed=(1, 2))
+    team_games = team_games_fixture(schedule, weeks=(1,))
+    # A second week-2 game the pbp feed also never delivered, added after team_games is
+    # built so it is genuinely uncovered. Two missing games, only one of them forgiven.
+    second = schedule.loc[schedule["week"].eq(2)].copy()
+    second["game_id"] = "2026_02_CCC_DDD"
+    schedule = pd.concat([schedule, second], ignore_index=True)
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("ratings must not be built while a game is unforgiven")
+
+    monkeypatch.setattr("nfl_game.pipeline.refresh_2026.ratings_for_targets", unexpected_call)
+    monkeypatch.setattr("nfl_game.pipeline.refresh_2026.build_game_features", unexpected_call)
+
+    with pytest.raises(ValueError, match="play-by-play does not cover") as excinfo:
+        build_refresh_artifacts(
+            historical,
+            schedule,
+            team_games,
+            pd.DataFrame(),
+            NOW,
+            allow_missing_pbp={"2026_02_AAA_BBB"},
+        )
+
+    message = str(excinfo.value)
+    assert "2026_02_CCC_DDD" in message, "the unforgiven game must be named"
+    assert "2026_02_AAA_BBB" not in message, "the forgiven game must not be reported"
+    assert "1 game(s)" in message, "the forgiven game must not be counted as blocking"
+
+
+def test_a_stale_allowlist_entry_warns_rather_than_halting_the_season(monkeypatch):
+    """An id that is no longer missing means the feed recovered.
+
+    Raising on it would reintroduce exactly the permanent halt this hatch exists to
+    prevent -- an operator who forgot to clear the variable would take the season down.
+    """
+    historical = historical_feature_fixture()
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2, 3), completed=(1, 2))
+    team_games = team_games_fixture(schedule, weeks=(1, 2))  # nothing is missing
+    _ratings_built(monkeypatch)
+
+    with pytest.warns(RuntimeWarning, match="no longer missing"):
+        result = build_refresh_artifacts(
+            historical,
+            schedule,
+            team_games,
+            pd.DataFrame(),
+            NOW,
+            allow_missing_pbp={"2026_02_AAA_BBB"},
+        )
+
+    assert sorted(result.features.query("season == 2026")["week"].unique()) == [3]
+
+
+def test_the_allowlist_defaults_to_empty_so_the_guard_is_unchanged(monkeypatch):
+    """The hatch must be opt-in: omitting it reproduces the original fail-closed guard."""
+    historical = historical_feature_fixture()
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2, 3), completed=(1, 2))
+    team_games = team_games_fixture(schedule, weeks=(1,))
+
+    with pytest.raises(ValueError, match="play-by-play does not cover"):
+        build_refresh_artifacts(historical, schedule, team_games, pd.DataFrame(), NOW)
+
+
+def test_allow_missing_pbp_parses_a_comma_separated_list():
+    args = refresh_cli._parser().parse_args(["--dry-run", "--allow-missing-pbp", "2026_02_AAA_BBB,2026_03_C_D"])
+
+    assert args.allow_missing_pbp == {"2026_02_AAA_BBB", "2026_03_C_D"}
+
+
+def test_allow_missing_pbp_defaults_to_an_empty_set():
+    assert refresh_cli._parser().parse_args(["--dry-run"]).allow_missing_pbp == set()
+
+
+def test_allow_missing_pbp_ignores_blank_entries_and_surrounding_space():
+    """A repo variable edited by hand picks up spaces and trailing commas."""
+    args = refresh_cli._parser().parse_args(["--dry-run", "--allow-missing-pbp", " 2026_02_AAA_BBB , ,"])
+
+    assert args.allow_missing_pbp == {"2026_02_AAA_BBB"}
+
+
+def test_the_cli_threads_the_allowlist_into_the_refresh(monkeypatch, tmp_path):
+    """A flag that parses but never reaches the guard would be worse than no flag."""
+    feature_path = tmp_path / "game_features.parquet"
+    schedule_path = tmp_path / "schedule_2026.parquet"
+    historical_feature_fixture().to_parquet(feature_path, index=False)
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2))
+    loaders, _ = _cli_loaders(schedule)
+    seen = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return RefreshArtifacts(historical_feature_fixture(), schedule)
+
+    monkeypatch.setattr(refresh_cli, "normalize_schedule", lambda rows, season: rows.copy())
+    monkeypatch.setattr(refresh_cli, "team_game_epa", lambda pbp: pd.DataFrame())
+    monkeypatch.setattr(refresh_cli, "build_refresh_artifacts", capture)
+    monkeypatch.setattr(refresh_cli, "build_historical_ledger", lambda features: pd.DataFrame())
+    monkeypatch.setattr(refresh_cli, "assert_acceptance_baseline", lambda ledger, expected: None)
+
+    refresh_cli.main(
+        [
+            "--dry-run",
+            "--features",
+            str(feature_path),
+            "--schedule",
+            str(schedule_path),
+            "--allow-missing-pbp",
+            "2026_02_AAA_BBB",
+        ],
+        loaders=loaders,
+        now=NOW,
+    )
+
+    assert seen["allow_missing_pbp"] == {"2026_02_AAA_BBB"}
+
+
+def test_an_allowlist_is_silent_when_there_are_no_prior_weeks_to_check(monkeypatch, recwarn):
+    """Before week 2 there is nothing for the guard to verify, so a leftover allowlist
+    entry is not yet stale -- warning here would mean daily noise all offseason for
+    something an operator cannot act on. Pinned so it is not "fixed" into noise.
+    """
+    historical = historical_feature_fixture()
+    schedule = normalized_2026_schedule_fixture(weeks=(1, 2), completed=())  # floor is 1
+    _ratings_built(monkeypatch)
+
+    build_refresh_artifacts(
+        historical,
+        schedule,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        NOW,
+        allow_missing_pbp={"2026_02_AAA_BBB"},
+    )
+
+    assert [w for w in recwarn if issubclass(w.category, RuntimeWarning)] == []

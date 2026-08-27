@@ -71,6 +71,12 @@ def _has_completed_regular_season_game(schedule: pd.DataFrame, now: datetime) ->
     return any(is_final_game(row, now) for _, row in schedule.iterrows())
 
 
+def _game_id_set(value: str) -> set[str]:
+    """Parse a comma-separated game_id list, tolerating the spacing a hand-edited
+    repository variable picks up."""
+    return {token.strip() for token in value.split(",") if token.strip()}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build deterministic 2026 schedule and prediction-week artifacts."
@@ -80,6 +86,18 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--write", action="store_true", help="atomically replace changed artifacts")
     parser.add_argument("--features", type=Path, default=PROCESSED_DIR / "game_features.parquet")
     parser.add_argument("--schedule", type=Path, default=PROCESSED_DIR / "schedule_2026.parquet")
+    parser.add_argument(
+        "--allow-missing-pbp",
+        type=_game_id_set,
+        default=set(),
+        metavar="GAME_ID[,GAME_ID...]",
+        help=(
+            "proceed even though play-by-play is missing for these specific games. "
+            "Escape hatch for a game that never lands, which would otherwise halt every "
+            "refresh for the rest of the season. Named ids only -- any OTHER missing game "
+            "still fails, and each forgiven game warns on every run."
+        ),
+    )
     return parser
 
 
@@ -122,6 +140,7 @@ def main(argv=None, loaders=None, now=None) -> None:
         team_games=team_games,
         ngs=ngs,
         now=now,
+        allow_missing_pbp=args.allow_missing_pbp,
     )
 
     ledger = build_historical_ledger(artifacts.features)

@@ -239,6 +239,34 @@ Do not set `ENABLE_OFFICIAL_TRACKER` during Stage 1. Stage 2 requires a separate
 the proposed game IDs, publication timestamps, frozen lines, model version, edge values,
 and excluded markets, followed by explicit approval in a later action.
 
+#### When play-by-play never lands for a game
+
+The refresh refuses to build ratings for a week whose predecessor is missing from the
+play-by-play feed (`_assert_pbp_covers_prior_weeks`). That is deliberate: the floor
+publishes week W on the first refresh that advances it, so a gap there would freeze a
+stale prediction permanently. It is also fail-closed with no timeout -- if a game never
+lands, **every refresh for the rest of the season fails and nothing publishes again.**
+
+The escape hatch is repository variable `ALLOW_MISSING_PBP`, a comma-separated list of
+game IDs to proceed without:
+
+```powershell
+gh variable set ALLOW_MISSING_PBP --body "2026_07_ABC_XYZ"
+gh workflow run refresh-2026-model.yml   # verify before the next scheduled run
+gh variable delete ALLOW_MISSING_PBP     # once the feed recovers
+```
+
+It names game IDs rather than being a boolean on purpose. A blanket skip would trade a
+loud permanent halt for a silent permanent corruption -- predictions frozen forever on
+ratings built without a week. With an allowlist, any *other* missing game still fails, so
+the next outage stays loud, and each forgiven game emits a `RuntimeWarning` on every run
+plus a workflow annotation. An entry that is no longer missing warns rather than failing,
+so a forgotten variable cannot take the season down by itself.
+
+**Forgiving a game is not free**: that week's ratings are built without it, and any
+prediction published from them is frozen. Prefer waiting for the feed. Use the hatch only
+once you have confirmed the game is genuinely never coming.
+
 If nflverse is unavailable, the command or workflow fails before replacing artifacts.
 Leave the reviewed files in place, wait for recovery, and manually rerun the relevant
 workflow; do not force a partial commit. The website continues with its last cached market

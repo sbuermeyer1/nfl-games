@@ -24,7 +24,21 @@ jobs:
           cache: pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
-      - run: python scripts/refresh_2026.py --write
+      # ALLOW_MISSING_PBP is the escape hatch for a play-by-play game that never lands,
+      # which would otherwise halt every refresh for the rest of the season. Set the repo
+      # variable to a comma-separated list of game_ids; any OTHER missing game still fails,
+      # and each forgiven game warns on every run. Clear it once the feed recovers.
+      - name: Refresh 2026 artifacts
+        shell: bash
+        env:
+          ALLOW_MISSING_PBP: ${{ vars.ALLOW_MISSING_PBP }}
+        run: |
+          if [ -n "$ALLOW_MISSING_PBP" ]; then
+            echo "::warning::refreshing with allowlisted missing pbp: $ALLOW_MISSING_PBP"
+            python scripts/refresh_2026.py --write --allow-missing-pbp "$ALLOW_MISSING_PBP"
+          else
+            python scripts/refresh_2026.py --write
+          fi
       - run: docker build -t nfl-game-model:refresh .
       - name: Commit changed artifacts
         shell: bash
