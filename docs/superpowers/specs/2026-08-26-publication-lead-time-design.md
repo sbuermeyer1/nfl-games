@@ -1,8 +1,37 @@
 # Publication lead time: move the pick lock from 24 hours to 4 days
 
 **Date:** 2026-08-26
-**Status:** approved, ready for implementation planning
+**Status:** implemented, then **SUPERSEDED on 2026-08-27 — the lock is now 5 days.**
 **Branch at time of writing:** `research/line-value`
+
+> ## Superseded: the lock is 5 days, not 4
+>
+> Everything below shipped as written. The **4-day number** did not survive its own open
+> question. This spec closed with the caveat "lead time is calibrated at 4 days, not
+> validated at 4 days" — the 4-day choice rested on a **14-game** availability sample
+> (14/14 priced at 4 days, 12/14 at 6). Once the d04/d05/d06 backfills completed, CLV was
+> re-measured on the **990 games priced at all three leads**:
+>
+> | lead | edge>=2 CLV | z | vs 0.48 break-even | edge>=3 CLV |
+> | --- | --- | --- | --- | --- |
+> | 4 days (this spec) | 0.2431 | 3.15 | 51% | 0.2605 |
+> | **5 days (shipped)** | **0.4717** | **5.20** | **98%** | **0.5815** |
+> | 6 days | 0.4747 | 5.23 | 99% | 0.5997 |
+>
+> Almost all the value sits between day 4 and day 5; day 6 adds +0.003 at edge>=2 and turns
+> **negative** at edge>=1. Availability also favours 5 days: 1,224/1,360 games priced (90.0%)
+> vs 88.8% at 4 days and 84.6% at 6.
+>
+> **The design below is unchanged and still correct** — only the constant moved. The vintage
+> floor, the staleness analysis, and the safety argument all carry over, and the floor is
+> what makes the wider lock safe. Re-measured under the 5-day lock: **245/272 games get the
+> full 5 days, 27 are floor-bound, the minimum lead anywhere is still 2.31 days, and zero
+> games are published on stale features.** No game receives *less* lead than it did at 4
+> days — 251 improve and 21 are unchanged.
+>
+> The lead table in this spec is now reproducible: `scripts/lead_time_distribution.py`
+> regenerates it, and its `--assert-baseline` flag re-derives this spec's published 4-day
+> figures (272 / 251 / 21 / 2.31) as a check on the method.
 
 ## Problem
 
@@ -202,4 +231,6 @@ The existing `LINE_DEADLINE` / `publication_window_missed` behaviour must be sho
 - **Lead time is calibrated at 4 days, not validated at 4 days.** The 14/14-priced figure comes
   from the d04 backfill. Live CLV should be tracked from the ledger's existing `published_*` vs
   `closing_*` columns, which need no schema change.
+  **RESOLVED 2026-08-27, and this caveat was right:** measured on 990 games priced at every
+  lead, 5 days nearly doubles CLV over 4. The lock is now 5 days. See the banner at the top.
 - The 2026 opener is **2026-09-09**; this must land before then to apply for the full season.

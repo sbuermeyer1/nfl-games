@@ -188,10 +188,13 @@ Publication and grading rules are immutable once a game is recorded:
 - A Ridge `ridge-v1` prediction becomes eligible for publication under the lead-time rule
   below. Its model margin, model total, model version, publication time, and original
   kickoff are frozen.
-- Picks lock **4 days before kickoff**, floored so that no game is published until the
-  features artifact has been rebuilt from a complete prior week. In practice the Sunday
-  and Monday slate gets the full 4 days; Thursday games and Thanksgiving are held by the
-  floor at roughly 2.3–2.6 days.
+- Picks lock **5 days before kickoff**, floored so that no game is published until the
+  features artifact has been rebuilt from a complete prior week. On the 2025 calendar
+  **245 of 272 games get the full 5 days**; the Sunday and Monday slate always does.
+  Thursday games and Thanksgiving are held by the floor at 2.3–2.6 days, one Friday
+  afternoon game at 3.4, and six late-season Saturday games at 4.5–4.6. The minimum lead
+  anywhere is 2.31 days and no game is ever published on stale features.
+  `scripts/lead_time_distribution.py` recomputes that table.
 - Spread and total publish independently. An available line is frozen with its observation
   time. A missing line remains pending until one hour before kickoff, then becomes excluded
   with `missing_line_at_deadline`; a record first seen after that deadline is excluded with
