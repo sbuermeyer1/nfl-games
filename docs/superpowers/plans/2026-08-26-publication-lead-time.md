@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded 2026-08-27:** this plan executed as written and shipped the 4-day lock.
+> The constant is now **5 days** — the design, the floor and every task below are
+> unchanged, only the number moved. See the banner in
+> `docs/superpowers/specs/2026-08-26-publication-lead-time-design.md`.
+
 **Goal:** Move the pick publication lock from 24 hours to 4 days before kickoff, floored by a features-artifact vintage check so no game is ever published on a stale prediction.
 
 **Architecture:** Two changes to the publication gate. `PUBLISH_BEFORE` becomes 4 days. A new required `first_publishable_week` parameter on `advance_live_ledger` blocks new-record creation for any week whose features were not built from a complete prior week. The floor is derived from the features artifact itself — `refresh_2026` appends only `active_prediction_weeks` (the first two unplayed weeks), so the minimum week present for the tracked season is exactly the week whose predecessors were all final at build time.

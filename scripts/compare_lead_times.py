@@ -4,9 +4,15 @@ The three corpora differ in which games were priced (1,179 / 1,224 / 1,150), and
 on its own set is exactly the unequal-set error that invalidated the ridge-v2 conclusion. So
 everything below is restricted to games priced at all three leads.
 
-The decision this informs: PUBLISH_BEFORE is 4 days. The vintage floor makes any longer lock
-safe (it holds a game until its features are fresh), so the only question is whether a longer
-lock buys enough CLV to matter. Break-even at -110 needs ~0.48 spread points.
+The decision this informed: PUBLISH_BEFORE moved from 4 days to 5 on 2026-08-27, on the table
+this script prints. The vintage floor makes any longer lock safe (it holds a game until its
+features are fresh), so the only question was whether a longer lock buys enough CLV to matter.
+Break-even at -110 needs ~0.48 spread points; 5 days reaches 98% of it at edge >= 2 where 4 days
+reached 51%, and 6 days adds +0.003 on top of 5 while going NEGATIVE at edge >= 1.
+
+The "4 days" / "5 days" / "6 days" keys below label the three line-history CACHES, which are
+snapshots taken at those leads. They are data, not the shipped constant, so they stay as they
+are when the lock changes.
 """
 
 import sys

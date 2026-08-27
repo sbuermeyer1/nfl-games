@@ -132,7 +132,7 @@ def test_refresh_raises_when_pbp_lags_the_schedules_feed(monkeypatch):
     """The floor trusts the schedules release; the ratings come from the pbp release.
 
     If pbp has not caught up, week 3's ratings would be built without week 2 and the
-    4-day publication lock would freeze that stale prediction permanently.
+    publication lock would freeze that stale prediction permanently.
     """
     historical = historical_feature_fixture()
     # weeks 1 and 2 final, week 3+ unplayed -> floor is 3

@@ -45,9 +45,10 @@ def _assert_pbp_covers_prior_weeks(
     `active_prediction_weeks` reads result/total from the SCHEDULES release, but the
     ratings feeding these features come from load_pbp -- a SEPARATE nflverse release.
     If schedules is ahead, the floor advances to a week whose ratings were built
-    without its predecessor. Under the 4-day publication lock the first refresh that
-    advances the floor is also the publication trigger, so that gap would freeze a
-    stale prediction permanently.
+    without its predecessor. Because the floor binds before `PUBLISH_BEFORE` does for
+    every early-week game, the first refresh that advances the floor is also the
+    publication trigger, so that gap would freeze a stale prediction permanently.
+    That coupling is a property of the floor, not of any particular lock length.
 
     This checks game_id presence only -- it does not verify that the ratings inputs
     for those games are non-null, so a partially-ingested play-by-play game would

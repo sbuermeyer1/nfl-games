@@ -78,8 +78,8 @@ def published_fixture(kickoff=NOW):
     )
 
 
-def test_publication_starts_at_exactly_four_days_but_not_before():
-    kickoff = NOW + pd.Timedelta(days=4)
+def test_publication_starts_at_exactly_five_days_but_not_before():
+    kickoff = NOW + pd.Timedelta(days=5)
 
     too_soon = advance(
         empty_live_ledger(),
@@ -99,27 +99,29 @@ def test_publication_starts_at_exactly_four_days_but_not_before():
     assert boundary["game_id"].tolist() == [GAME_ID]
 
 
-def test_thursday_game_is_held_by_the_floor_not_the_four_day_mark():
-    """A week-3 Thursday kickoff sits 4 days after the week-2 Sunday slate.
+def test_thursday_game_is_held_by_the_floor_not_the_five_day_mark():
+    """A week-3 Thursday kickoff sits 5 days before the week-2 slate has finished.
 
-    The 4-day mark alone would publish it while week 2 was still being played, on
-    week-1 features. The floor is what holds it until the week-3 refresh.
+    The 5-day mark alone would publish it while week 2 was still being played, on
+    week-1 features. The floor is what holds it until the week-3 refresh. Widening
+    the lock from 4 days to 5 moves this mark earlier, so the floor matters more,
+    not less.
     """
     kickoff = pd.Timestamp("2026-09-24T00:15:00Z")  # Thu 8:15pm ET
-    four_days_out = kickoff - pd.Timedelta(days=4)  # Sun, week 2 still in progress
+    five_days_out = kickoff - pd.Timedelta(days=5)  # Sat, week 2 not yet played
 
     held = advance_live_ledger(
         empty_live_ledger(),
         schedule_fixture(kickoff, week=3),
         predictions_fixture(),
-        four_days_out,
+        five_days_out,
         first_publishable_week=2,
     )
     released = advance_live_ledger(
         empty_live_ledger(),
         schedule_fixture(kickoff, week=3),
         predictions_fixture(),
-        four_days_out,
+        five_days_out,
         first_publishable_week=3,
     )
 
@@ -127,14 +129,14 @@ def test_thursday_game_is_held_by_the_floor_not_the_four_day_mark():
     assert len(released) == 1
 
 
-def test_sunday_game_publishes_at_the_full_four_days():
+def test_sunday_game_publishes_at_the_full_five_days():
     kickoff = pd.Timestamp("2026-09-27T17:00:00Z")  # Sun 1:00pm ET
 
     advanced = advance_live_ledger(
         empty_live_ledger(),
         schedule_fixture(kickoff, week=3),
         predictions_fixture(),
-        kickoff - pd.Timedelta(days=4),
+        kickoff - pd.Timedelta(days=5),
         first_publishable_week=3,
     )
 
@@ -144,25 +146,26 @@ def test_sunday_game_publishes_at_the_full_four_days():
 def test_friday_game_is_held_by_the_floor():
     """The one Friday afternoon game on the 2025 calendar is floor-bound at ~3.4 days.
 
-    Its 4-day mark lands on the prior Monday, before the Tuesday refresh that folds in
-    the previous week. Kept as a distinct case because Friday football is rare enough
-    that a Thursday-only test would not cover it.
+    Its 5-day mark lands mid-slate on the prior Sunday, well before the Tuesday refresh
+    that folds in the previous week. The realized lead stays ~3.4 days because the floor,
+    not PUBLISH_BEFORE, is what releases it. Kept as a distinct case because Friday
+    football is rare enough that a Thursday-only test would not cover it.
     """
     kickoff = pd.Timestamp("2026-09-25T19:00:00Z")  # Fri 3:00pm ET
-    four_days_out = kickoff - pd.Timedelta(days=4)  # Mon, week 2 not yet finalized
+    five_days_out = kickoff - pd.Timedelta(days=5)  # Sun, week 2 mid-slate
 
     held = advance_live_ledger(
         empty_live_ledger(),
         schedule_fixture(kickoff, week=3),
         predictions_fixture(),
-        four_days_out,
+        five_days_out,
         first_publishable_week=2,
     )
     released = advance_live_ledger(
         empty_live_ledger(),
         schedule_fixture(kickoff, week=3),
         predictions_fixture(),
-        four_days_out,
+        five_days_out,
         first_publishable_week=3,
     )
 
@@ -170,7 +173,7 @@ def test_friday_game_is_held_by_the_floor():
     assert len(released) == 1
 
 
-def test_week_one_publishes_at_four_days_with_a_vacuous_floor():
+def test_week_one_publishes_at_five_days_with_a_vacuous_floor():
     """Week 1 has no prior week, so the floor is satisfied by first_publishable_week=1."""
     kickoff = pd.Timestamp("2026-09-13T17:00:00Z")
 
@@ -178,7 +181,7 @@ def test_week_one_publishes_at_four_days_with_a_vacuous_floor():
         empty_live_ledger(),
         schedule_fixture(kickoff, week=1),
         predictions_fixture(),
-        kickoff - pd.Timedelta(days=4),
+        kickoff - pd.Timedelta(days=5),
         first_publishable_week=1,
     )
 
