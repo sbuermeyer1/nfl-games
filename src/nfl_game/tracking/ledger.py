@@ -188,7 +188,6 @@ def grade_ledger(facts):
         )
     ]
 
-    record_type = _column(ledger, "record_type")
     published_spread = _column(ledger, "published_spread_line")
     published_total = _column(ledger, "published_total_line")
     closing_spread = _column(ledger, "closing_spread_line")
