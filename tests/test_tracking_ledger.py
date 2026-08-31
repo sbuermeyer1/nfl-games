@@ -369,3 +369,98 @@ def test_validate_ledger_rejects_published_lines_on_backtest(column, value):
 
     with pytest.raises(ValueError, match="published"):
         validate_ledger(ledger)
+
+
+def _early_line_predictions() -> pd.DataFrame:
+    """Two games: one priced 5 days out, one the market had not posted yet."""
+    return pd.DataFrame(
+        {
+            "game_id": ["2025_01_AAA_BBB", "2025_01_CCC_DDD"],
+            "season": [2025, 2025],
+            "week": [1, 1],
+            "away_team": ["AAA", "CCC"],
+            "home_team": ["BBB", "DDD"],
+            "model_margin": [7.0, 2.0],
+            "model_total": [46.0, 44.0],
+            "spread_line": [6.0, 1.0],
+            "total_line": [44.0, 41.0],
+            "margin": [5.0, 3.0],
+            "total_points": [48.0, 40.0],
+        }
+    )
+
+
+def _early_lines() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "game_id": ["2025_01_AAA_BBB"],
+            "early_spread_line": [3.0],
+            "early_total_line": [43.0],
+        }
+    )
+
+
+def test_backtest_early_lines_become_the_official_and_published_line():
+    ledger = build_backtest_ledger(
+        _early_line_predictions(), early_lines=_early_lines()
+    ).set_index("game_id")
+    row = ledger.loc["2025_01_AAA_BBB"]
+
+    assert row["official_spread_line"] == 3.0
+    assert row["published_spread_line"] == 3.0
+    assert row["official_total_line"] == 43.0
+    assert row["published_total_line"] == 43.0
+    # The close is still the market's closing number, not the early one.
+    assert row["closing_spread_line"] == 6.0
+    assert row["closing_total_line"] == 44.0
+
+
+def test_backtest_early_and_closing_grades_can_disagree():
+    """The whole point: the two grades must be able to differ, or neither means anything.
+
+    model 7.0 vs early 3.0 picks home; the home team wins by 5. That covers the early number
+    (5 > 3) and fails the closing one (5 < 6).
+    """
+    ledger = build_backtest_ledger(
+        _early_line_predictions(), early_lines=_early_lines()
+    ).set_index("game_id")
+    row = ledger.loc["2025_01_AAA_BBB"]
+
+    assert row["spread_pick"] == "home"
+    assert row["spread_grade"] == "win"
+    assert row["spread_close_grade"] == "loss"
+
+
+def test_backtest_early_lines_populate_clv_signed_by_the_pick():
+    ledger = build_backtest_ledger(
+        _early_line_predictions(), early_lines=_early_lines()
+    ).set_index("game_id")
+
+    # Picked home at 3.0, the line closed at 6.0: it moved 3 points toward the pick.
+    assert ledger.loc["2025_01_AAA_BBB", "spread_clv"] == 3.0
+
+
+def test_backtest_game_without_an_early_line_is_excluded_not_graded():
+    ledger = build_backtest_ledger(
+        _early_line_predictions(), early_lines=_early_lines()
+    ).set_index("game_id")
+    row = ledger.loc["2025_01_CCC_DDD"]
+
+    assert row["spread_publication_status"] == "excluded"
+    assert row["spread_exclusion_reason"] == "no_early_line"
+    assert row["spread_grade"] == "no_pick"
+    assert row["spread_close_grade"] == "no_pick"
+    assert pd.isna(row["published_spread_line"])
+
+
+def test_backtest_without_early_lines_keeps_todays_closing_line_behaviour():
+    """Omitting early lines must leave the shipped historical ledger exactly as it was."""
+    ledger = build_backtest_ledger(_early_line_predictions()).set_index("game_id")
+    row = ledger.loc["2025_01_AAA_BBB"]
+
+    assert row["official_spread_line"] == 6.0
+    assert pd.isna(row["published_spread_line"])
+    assert pd.isna(row["spread_close_grade"])
+    assert pd.isna(row["spread_clv"])
+    # Graded against the close, which is what the acceptance baseline pins.
+    assert row["spread_grade"] == "loss"

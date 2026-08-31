@@ -124,10 +124,16 @@ def _grade(pick, actual, line, high_label, force_no_pick=False):
     return "win" if high_won == (pick == high_label) else "loss"
 
 
-def _clv(record_type, pick, published, closing, high_label, force_no_pick=False):
+def _clv(pick, published, closing, high_label, force_no_pick=False):
+    """Points the line moved toward the pick between publication and close.
+
+    Defined for any row carrying BOTH a published line and a closing line, which since the
+    early-line backfill includes backtest rows. It used to be gated on record_type == "live",
+    from when backtest rows had no published number to move from.
+    """
     if force_no_pick:
         return np.nan
-    if record_type != "live" or pd.isna(pick) or pd.isna(published) or pd.isna(closing):
+    if pd.isna(pick) or pd.isna(published) or pd.isna(closing):
         return np.nan
     movement = closing - published
     return float(movement if pick == high_label else -movement)
@@ -188,54 +194,89 @@ def grade_ledger(facts):
     closing_spread = _column(ledger, "closing_spread_line")
     closing_total = _column(ledger, "closing_total_line")
     ledger["spread_clv"] = [
-        _clv(kind, pick, published, closing, "home", force)
-        for kind, pick, published, closing, force in zip(
-            record_type, ledger["spread_pick"], published_spread, closing_spread, spread_no_pick
+        _clv(pick, published, closing, "home", force)
+        for pick, published, closing, force in zip(
+            ledger["spread_pick"], published_spread, closing_spread, spread_no_pick
         )
     ]
     ledger["total_clv"] = [
-        _clv(kind, pick, published, closing, "over", force)
-        for kind, pick, published, closing, force in zip(
-            record_type, ledger["total_pick"], published_total, closing_total, total_no_pick
+        _clv(pick, published, closing, "over", force)
+        for pick, published, closing, force in zip(
+            ledger["total_pick"], published_total, closing_total, total_no_pick
         )
     ]
 
     ledger["spread_close_grade"] = [
-        _grade(pick, actual, line, "home", force) if kind == "live" else pd.NA
-        for kind, pick, actual, line, force in zip(
-            record_type, ledger["spread_pick"], actual_margin, closing_spread, spread_no_pick
+        _grade(pick, actual, line, "home", force) if not pd.isna(status) else pd.NA
+        for status, pick, actual, line, force in zip(
+            spread_status, ledger["spread_pick"], actual_margin, closing_spread, spread_no_pick
         )
     ]
     ledger["total_close_grade"] = [
-        _grade(pick, actual, line, "over", force) if kind == "live" else pd.NA
-        for kind, pick, actual, line, force in zip(
-            record_type, ledger["total_pick"], actual_total, closing_total, total_no_pick
+        _grade(pick, actual, line, "over", force) if not pd.isna(status) else pd.NA
+        for status, pick, actual, line, force in zip(
+            total_status, ledger["total_pick"], actual_total, closing_total, total_no_pick
         )
     ]
     return ledger.reindex(columns=LEDGER_COLUMNS)
 
 
-def build_backtest_ledger(predictions, model_version=HISTORICAL_MODEL_VERSION):
-    """Convert historical walk-forward predictions into a validated ledger."""
+def build_backtest_ledger(predictions, model_version=HISTORICAL_MODEL_VERSION, early_lines=None):
+    """Convert historical walk-forward predictions into a validated ledger.
+
+    With `early_lines` (a frame of game_id / early_spread_line / early_total_line), each game is
+    graded against the number that was actually available at publication time, and the market's
+    closing number is retained separately. That makes a backtest row mean the same thing as a
+    live one: `spread_grade` is settled at the published line, `spread_close_grade` at the close.
+
+    Without it the historical corpus keeps its original meaning -- graded at the close, with no
+    published line and no CLV -- which is what the acceptance baseline pins.
+
+    A game with no early line is marked `excluded` rather than dropped or back-filled from the
+    close. Back-filling would grade it at a number nobody could have bet, and dropping it would
+    lose the record that the market had not priced it.
+    """
     facts = predictions.rename(
         columns={"margin": "actual_margin", "total_points": "actual_total"}
     ).copy()
     facts["record_type"] = "backtest"
     facts["model_version"] = model_version
     facts["estimator"] = OFFICIAL_ESTIMATOR
-    facts["official_spread_line"] = _column(facts, "spread_line")
-    facts["official_total_line"] = _column(facts, "total_line")
-    facts["published_spread_line"] = np.nan
-    facts["published_total_line"] = np.nan
     facts["closing_spread_line"] = _column(facts, "spread_line")
     facts["closing_total_line"] = _column(facts, "total_line")
     facts["published_at"] = pd.NaT
     for column in _LIVE_ONLY_COLUMNS:
         facts[column] = pd.NA
 
+    if early_lines is None:
+        facts["official_spread_line"] = _column(facts, "spread_line")
+        facts["official_total_line"] = _column(facts, "total_line")
+        facts["published_spread_line"] = np.nan
+        facts["published_total_line"] = np.nan
+    else:
+        _apply_early_lines(facts, early_lines)
+
     ledger = grade_ledger(facts)
     validate_ledger(ledger)
     return ledger
+
+
+def _apply_early_lines(facts, early_lines):
+    """Publish each game at its early line, and mark the unpriced ones excluded."""
+    required = {"game_id", "early_spread_line", "early_total_line"}
+    missing = sorted(required.difference(early_lines.columns))
+    if missing:
+        raise ValueError(f"early_lines is missing required column(s) {missing}")
+    if early_lines["game_id"].duplicated().any():
+        raise ValueError("early_lines contains duplicate game_id values")
+
+    lookup = early_lines.drop_duplicates("game_id").set_index("game_id")
+    for kind, column in (("spread", "early_spread_line"), ("total", "early_total_line")):
+        early = facts["game_id"].map(lookup[column]).astype(float)
+        facts[f"official_{kind}_line"] = early
+        facts[f"published_{kind}_line"] = early
+        facts[f"{kind}_publication_status"] = np.where(early.notna(), "published", "excluded")
+        facts[f"{kind}_exclusion_reason"] = np.where(early.notna(), None, "no_early_line")
 
 
 def _same_values(actual, expected):
