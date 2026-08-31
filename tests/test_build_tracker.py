@@ -319,3 +319,35 @@ def test_early_baseline_gate_rejects_a_change_in_the_excluded_count(monkeypatch)
             early_lines=_early_lines(),
             expected_early_baseline=expected,
         )
+
+
+def test_historical_baseline_selects_the_record_the_corpus_actually_carries(monkeypatch):
+    """The live tracker reads a persisted ledger; it must accept either build, and only that one.
+
+    Getting this wrong halts the 15-minute cron for the season, so both directions are pinned.
+    """
+    legacy = build_tracker.build_backtest_ledger(predictions())
+    early = build_tracker.build_backtest_ledger(predictions(), early_lines=_early_lines())
+    monkeypatch.setattr(build_tracker, "EXPECTED_BASELINE",
+                        build_tracker.acceptance_metrics(legacy))
+    monkeypatch.setattr(build_tracker, "EXPECTED_EARLY_BASELINE",
+                        build_tracker.early_acceptance_metrics(early))
+
+    build_tracker.assert_historical_baseline(legacy)
+    build_tracker.assert_historical_baseline(early)
+
+    # Each corpus must be rejected against the OTHER record, or the selection does nothing.
+    monkeypatch.setattr(build_tracker, "EXPECTED_BASELINE",
+                        build_tracker.acceptance_metrics(early))
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.assert_historical_baseline(legacy)
+
+
+def test_historical_baseline_rejects_an_early_corpus_that_drifted(monkeypatch):
+    early = build_tracker.build_backtest_ledger(predictions(), early_lines=_early_lines())
+    drifted = dict(build_tracker.early_acceptance_metrics(early))
+    drifted["ats_wins"] = drifted["ats_wins"] + 1
+    monkeypatch.setattr(build_tracker, "EXPECTED_EARLY_BASELINE", drifted)
+
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.assert_historical_baseline(early)

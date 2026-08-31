@@ -110,6 +110,31 @@ def assert_acceptance_baseline(ledger: pd.DataFrame, expected: dict, metrics=Non
             raise RuntimeError("acceptance baseline changed")
 
 
+def assert_historical_baseline(historical: pd.DataFrame) -> None:
+    """Assert whichever acceptance record the historical corpus in hand actually carries.
+
+    The live tracker reads a persisted ledger and must accept it whether it was built before or
+    after the early-line backfill. Which record applies is decided the same way it is everywhere
+    else in the ledger: a corpus whose rows carry a publication status was graded at the line
+    available at publication, so it is pinned by EXPECTED_EARLY_BASELINE; one without was graded
+    at the close and is pinned by the original EXPECTED_BASELINE.
+
+    Choosing by inspection rather than by a flag matters because this runs in the 15-minute cron:
+    a mismatch here halts the season's tracking, and the artifact is the only thing that knows
+    which way it was built.
+    """
+    statuses = ["spread_publication_status", "total_publication_status"]
+    if historical.empty or not any(column in historical for column in statuses):
+        assert_acceptance_baseline(historical, EXPECTED_BASELINE)
+        return
+    if historical[statuses].notna().any().any():
+        assert_acceptance_baseline(
+            historical, EXPECTED_EARLY_BASELINE, metrics=early_acceptance_metrics
+        )
+    else:
+        assert_acceptance_baseline(historical, EXPECTED_BASELINE)
+
+
 def build_historical_ledger(
     features: pd.DataFrame,
     test_seasons=HISTORICAL_SEASONS,
