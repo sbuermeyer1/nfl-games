@@ -16,6 +16,13 @@ data/processed/*
 
 # Isolated feature workspaces.
 .worktrees/
+# The per-game-anchored 5-day line history is an INPUT to the shipped tracker ledger, so a
+# fresh clone must be able to rebuild that artifact without a GITHUB_TOKEN and a 15-minute
+# backfill. Only the combined g05 file is kept; the per-week shards and the other leads stay
+# ignored and are reproducible with scripts/backfill_line_history.py --anchor game.
+!data/raw/line_history/
+data/raw/line_history/*
+!data/raw/line_history/line_history_combined_g05.parquet
 !data/processed/game_features.parquet
 !data/processed/tracker_ledger.parquet
 !data/processed/schedule_2026.parquet

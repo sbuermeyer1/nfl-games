@@ -134,7 +134,8 @@ def test_write_combines_unchanged_history_with_valid_live_rows(tmp_path, monkeyp
     assert result == 0
     assert len(historical) == 1359
     assert len(ledger.query("record_type == 'live'")) == 1
-    build_tracker.assert_acceptance_baseline(historical, build_tracker.EXPECTED_BASELINE)
+    # Selects the record the corpus carries, which is what production does.
+    build_tracker.assert_historical_baseline(historical)
 
 
 def test_identical_write_is_digest_no_op_and_does_not_repredict(tmp_path, monkeypatch, capsys):
