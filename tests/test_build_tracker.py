@@ -222,3 +222,100 @@ def test_acceptance_gate_rejects_missing_or_extra_expected_metrics(monkeypatch, 
 
     with pytest.raises(RuntimeError, match="acceptance baseline changed"):
         build_tracker.assert_acceptance_baseline(pd.DataFrame(), expected)
+
+
+def _early_lines():
+    """Only the first game is priced, so the excluded path is exercised too."""
+    return pd.DataFrame(
+        {
+            "game_id": ["2025_01_AAA_BBB"],
+            "early_spread_line": [1.0],
+            "early_total_line": [46.0],
+            "snapshot_at": [pd.Timestamp("2025-09-02T00:20:00Z")],
+        }
+    )
+
+
+def _patch_walk_forward(monkeypatch, frame=None):
+    monkeypatch.setattr(
+        build_tracker,
+        "walk_forward",
+        lambda features, test_seasons, estimator, alpha: (
+            predictions() if frame is None else frame
+        ),
+    )
+
+
+def test_early_line_build_ships_early_grades_and_keeps_the_legacy_gate(monkeypatch):
+    """The shipped ledger is graded at the early line; the legacy corpus is still asserted."""
+    _patch_walk_forward(monkeypatch)
+    legacy_seen = {}
+
+    real_assert = build_tracker.assert_acceptance_baseline
+
+    def spy(ledger, expected, metrics=None):
+        legacy_seen.setdefault("calls", []).append(
+            (ledger["official_spread_line"].tolist(), metrics)
+        )
+        return real_assert(ledger, expected, metrics)
+
+    monkeypatch.setattr(build_tracker, "assert_acceptance_baseline", spy)
+    monkeypatch.setattr(build_tracker, "EXPECTED_BASELINE", build_tracker.acceptance_metrics(
+        build_tracker.build_backtest_ledger(predictions())
+    ))
+    early_ledger = build_tracker.build_backtest_ledger(
+        predictions(), early_lines=_early_lines()
+    )
+    monkeypatch.setattr(
+        build_tracker, "EXPECTED_EARLY_BASELINE",
+        build_tracker.early_acceptance_metrics(early_ledger),
+    )
+
+    out = build_tracker.build_historical_ledger(
+        pd.DataFrame({"season": [2025]}),
+        expected_baseline=build_tracker.EXPECTED_BASELINE,
+        early_lines=_early_lines(),
+        expected_early_baseline=build_tracker.EXPECTED_EARLY_BASELINE,
+    )
+
+    # Two assertions ran: the legacy build on closing lines, then the shipped early build.
+    assert len(legacy_seen["calls"]) == 2
+    assert legacy_seen["calls"][0][0] == [3.0, 1.0]  # legacy = closing lines
+    assert legacy_seen["calls"][0][1] is None
+    assert legacy_seen["calls"][1][1] is build_tracker.early_acceptance_metrics
+    # And the ledger returned is the early-line one, not the legacy one.
+    assert out.loc[out["game_id"].eq("2025_01_AAA_BBB"), "official_spread_line"].iloc[0] == 1.0
+
+
+def test_early_line_build_still_fails_on_legacy_corpus_drift(monkeypatch):
+    """Grading at the early line must not weaken the original guard."""
+    _patch_walk_forward(monkeypatch)
+    drifted = dict(build_tracker.EXPECTED_BASELINE)
+    drifted["ats_wins"] = drifted["ats_wins"] + 1
+
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.build_historical_ledger(
+            pd.DataFrame({"season": [2025]}),
+            expected_baseline=drifted,
+            early_lines=_early_lines(),
+        )
+
+
+def test_early_baseline_gate_rejects_a_change_in_the_excluded_count(monkeypatch):
+    """A line-history rebuild that lost coverage is the quietest way this artifact could move."""
+    _patch_walk_forward(monkeypatch)
+    legacy = build_tracker.acceptance_metrics(build_tracker.build_backtest_ledger(predictions()))
+    early_ledger = build_tracker.build_backtest_ledger(
+        predictions(), early_lines=_early_lines()
+    )
+    expected = build_tracker.early_acceptance_metrics(early_ledger)
+    assert expected["excluded_spread"] == 1, "fixture must exclude a game or this cannot fail"
+    expected["excluded_spread"] = 0
+
+    with pytest.raises(RuntimeError, match="acceptance baseline changed"):
+        build_tracker.build_historical_ledger(
+            pd.DataFrame({"season": [2025]}),
+            expected_baseline=legacy,
+            early_lines=_early_lines(),
+            expected_early_baseline=expected,
+        )
