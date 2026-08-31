@@ -489,3 +489,38 @@ def test_backtest_without_early_lines_keeps_todays_closing_line_behaviour():
     assert pd.isna(row["spread_clv"])
     # Graded against the close, which is what the acceptance baseline pins.
     assert row["spread_grade"] == "loss"
+
+
+def test_clv_is_null_not_a_crash_when_the_published_line_is_pd_na():
+    """The published-line guard in _clv is not redundant against np.nan's propagation.
+
+    `5.0 - np.nan` is nan, so with float columns the guard looks like it does nothing. But
+    `5.0 - pd.NA` is pd.NA and `float(pd.NA)` raises TypeError, and an object-dtype column is
+    exactly what a ledger round-tripped through parquet can carry. Deleting the guard passes
+    every other test in this file and then crashes on real data.
+    """
+    ledger = grade_ledger(
+        facts(
+            {
+                "record_type": "backtest",
+                "official_spread_line": 3.0,
+                "official_total_line": 44.0,
+                "closing_spread_line": 3.0,
+                "closing_total_line": 44.0,
+                "published_spread_line": pd.NA,
+                "published_total_line": pd.NA,
+                "published_at": pd.NaT,
+                "spread_publication_status": pd.NA,
+                "total_publication_status": pd.NA,
+                "published_spread_observed_at": pd.NaT,
+                "published_total_observed_at": pd.NaT,
+                "closing_spread_observed_at": pd.NaT,
+                "closing_total_observed_at": pd.NaT,
+                "current_kickoff_at": pd.NaT,
+            }
+        )
+    )
+
+    assert pd.isna(ledger.loc[0, "spread_clv"])
+    assert pd.isna(ledger.loc[0, "total_clv"])
+    validate_ledger(ledger)
