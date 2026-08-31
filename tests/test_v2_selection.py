@@ -709,3 +709,53 @@ def test_common_season_set_still_applies_the_eligibility_floors():
     assert selected is not None
     assert selected.config.candidate == "C0"
     assert selected.validation_seasons == (2019, 2020, 2021)
+
+
+def test_reference_uses_the_intersection_across_c0_variants_not_their_union():
+    """Every reference season must be one that EVERY C0 variant actually has.
+
+    With a union, a season only one C0 variant could fit becomes reference ground, and the other
+    variant is then scored on a set it never faced -- reintroducing the unequal comparison this
+    fix exists to remove. A single-C0 fixture cannot tell union from intersection, so this one
+    carries two.
+    """
+    c0_a = _config("C0", alpha=1.0)
+    c0_b = replace(c0_a, alpha=10.0)
+    c2 = _config("C2")
+    scores = pd.DataFrame(
+        [
+            # Only this C0 variant reaches 2018, and it is catastrophic there.
+            *_rows_for_seasons(c0_a, {2018: 30.0, 2019: 10.0, 2020: 10.0}),
+            *_rows_for_seasons(c0_b, {2019: 10.0, 2020: 10.0}),
+            *_rows_for_seasons(c2, {2018: 1.0, 2019: 9.5, 2020: 9.5}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    # Intersection across C0 variants is {2019, 2020}; 2018 is not shared and must not count.
+    assert selected.validation_seasons == (2019, 2020)
+    assert selected.config.candidate == "C2"
+    assert selected.mean_inner_mae == pytest.approx(9.5)
+
+
+def test_eligibility_floors_apply_after_restriction_not_before():
+    """A config that clears the floors only on seasons nobody else faced must stay ineligible.
+
+    This is the dangerous shape: C4 has three seasons and 600 games, so it passes the floors on
+    its own rows, but shares just ONE season with the baseline. Scored on that single shared
+    season it has a flattering 0.001 MAE and would win outright.
+    """
+    scores = pd.DataFrame(
+        [
+            *_rows_for_seasons(_config("C0"), {2019: 5.0, 2020: 5.0, 2021: 5.0}),
+            *_rows_for_seasons(_config("C4"), {2016: 0.001, 2017: 0.001, 2021: 0.001}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    assert selected.config.candidate == "C0"
+    assert selected.mean_inner_mae == pytest.approx(5.0)
