@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from nfl_game.data.line_history import collect_line_history
+from nfl_game.data.line_history import collect_game_line_history, collect_line_history
 from nfl_game.data.nfl import load_schedules
 from nfl_game.data.schedule import normalize_schedule
 from nfl_game.paths import RAW_DIR
@@ -41,6 +41,17 @@ def _parser() -> argparse.ArgumentParser:
         help="snapshot lead time; 4 gave full coverage where 6 lost unposted games",
     )
     parser.add_argument("--cache-dir", type=Path, default=CACHE_DIR)
+    parser.add_argument(
+        "--anchor",
+        choices=("week", "game"),
+        default="week",
+        help=(
+            "week: one snapshot --days-before the week's FIRST kickoff (the original behaviour). "
+            "game: one snapshot --days-before EACH game's own kickoff, which is what the live "
+            "publication lock does. A week-anchored '5 day' snapshot sits a mean of 7.51 days "
+            "before each game, so only --anchor game is comparable with live tracker records."
+        ),
+    )
     return parser
 
 
@@ -74,9 +85,14 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir.mkdir(parents=True, exist_ok=True)
     print(
         f"seasons {seasons[0]}-{seasons[-1]}, days_before={args.days_before}, "
-        f"token={'yes' if token else 'no'}",
+        f"anchor={args.anchor}, token={'yes' if token else 'no'}",
         flush=True,
     )
+
+    collector = collect_game_line_history if args.anchor == "game" else collect_line_history
+    # A game-anchored snapshot and a week-anchored one at the same lead are different
+    # measurements, so they must never share a cache file or be concatenated together.
+    tag = "g" if args.anchor == "game" else "d"
 
     raw = load_schedules()
     schedule = pd.concat(
@@ -88,28 +104,34 @@ def main(argv: list[str] | None = None) -> int:
 
     done = 0
     for season, week in weeks:
-        target = cache_dir / f"line_history_{season}_wk{week:02d}_d{args.days_before:02d}.parquet"
+        target = cache_dir / f"line_history_{season}_wk{week:02d}_{tag}{args.days_before:02d}.parquet"
         if target.exists():
             done += 1
             continue
         _wait_for_quota(token)
         subset = schedule.loc[schedule["season"].eq(season) & schedule["week"].eq(week)]
-        frame = collect_line_history(subset, days_before=args.days_before, token=token)
+        frame = collector(subset, days_before=args.days_before, token=token)
         frame.to_parquet(target, index=False)
         done += 1
         priced = int(frame["early_spread_line"].notna().sum())
+        stamps = pd.to_datetime(frame["snapshot_at"], utc=True)
+        when = (
+            f"@ {stamps.min():%Y-%m-%d %H:%M} UTC"
+            if stamps.nunique() <= 1
+            else f"@ {stamps.min():%m-%d %H:%M}..{stamps.max():%m-%d %H:%M} UTC "
+            f"({stamps.nunique()} snapshots)"
+        )
         print(
-            f"  [{done}/{len(weeks)}] {season} wk{week:02d}: {priced}/{len(frame)} priced "
-            f"@ {frame['snapshot_at'].iloc[0]:%Y-%m-%d %H:%M} UTC",
+            f"  [{done}/{len(weeks)}] {season} wk{week:02d}: {priced}/{len(frame)} priced {when}",
             flush=True,
         )
 
     # Only this run's lead time, and never the combined file, which lives in this directory
     # and would otherwise be concatenated into its own successor. A snapshot taken 6 days out
     # is a different measurement from one taken 4 days out, so the two never share a cache.
-    parts = sorted(cache_dir.glob(f"line_history_*_wk*_d{args.days_before:02d}.parquet"))
+    parts = sorted(cache_dir.glob(f"line_history_*_wk*_{tag}{args.days_before:02d}.parquet"))
     combined = pd.concat([pd.read_parquet(path) for path in parts], ignore_index=True)
-    out_path = cache_dir / f"line_history_combined_d{args.days_before:02d}.parquet"
+    out_path = cache_dir / f"line_history_combined_{tag}{args.days_before:02d}.parquet"
     combined.to_parquet(out_path, index=False)
     print(f"\ncombined {len(parts)} weeks -> {len(combined)} games at {out_path}")
     print(f"priced: {int(combined['early_spread_line'].notna().sum())}/{len(combined)}")
