@@ -72,7 +72,7 @@ TRACKER_PAGE = """<!doctype html>
     <div id="closing-line" class="cards"></div>
   </section>
 
-  <p class="note">Historical results are walk-forward backtests graded against closing lines.
+  <p class="note">Historical results are walk-forward backtests graded at the line available five days before kickoff, the same lock the live tracker publishes under. The closing-line columns show the same picks settled at the close instead.
   Live tracking begins in 2026. A 52.4% win rate is the standard -110 break-even reference.
   This is model tracking, not betting advice.</p>
 </main>
@@ -219,7 +219,7 @@ function renderSummary(body) {
     return;
   }
   trackerMessage.textContent = activeRecordType === 'backtest'
-    ? 'Walk-forward backtest against closing lines.'
+    ? 'Walk-forward backtest, graded at the 5-day publication line.'
     : 'Official record uses frozen published lines.';
   renderRecordCards(qualifiedCards, body.qualified);
   renderRecordCards(allRecords, body.all_predictions);

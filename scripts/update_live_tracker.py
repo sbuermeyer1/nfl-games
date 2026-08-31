@@ -22,9 +22,9 @@ from nfl_game.tracking.live import PUBLISH_BEFORE, advance_live_ledger
 from nfl_game.web.service import SlateService
 
 if __package__:
-    from scripts.build_tracker import EXPECTED_BASELINE, assert_acceptance_baseline
+    from scripts.build_tracker import assert_historical_baseline
 else:
-    from build_tracker import EXPECTED_BASELINE, assert_acceptance_baseline
+    from build_tracker import assert_historical_baseline
 
 PREDICTION_COLUMNS = ["game_id", "model_margin", "model_total"]
 LEGACY_BACKTEST_MISSING_COLUMNS = {
@@ -318,7 +318,7 @@ def _validated_parquet_bytes(ledger: pd.DataFrame) -> bytes:
     persisted = pd.read_parquet(io.BytesIO(payload))
     validate_ledger(persisted)
     historical = persisted.loc[persisted["record_type"].eq("backtest")]
-    assert_acceptance_baseline(historical, EXPECTED_BASELINE)
+    assert_historical_baseline(historical)
     return payload
 
 
@@ -361,7 +361,7 @@ def main(argv=None, loader=None, now=None) -> int:
     ledger = _load_ledger(args.ledger)
     historical = ledger.loc[ledger["record_type"].eq("backtest")].copy()
     existing_live = ledger.loc[ledger["record_type"].eq("live")].copy()
-    assert_acceptance_baseline(historical, EXPECTED_BASELINE)
+    assert_historical_baseline(historical)
 
     voids = _parse_voids(args.void_game)
     existing_live = _apply_voids(existing_live, voids)
@@ -386,9 +386,7 @@ def main(argv=None, loader=None, now=None) -> int:
     )
     combined = combined.reindex(columns=LEDGER_COLUMNS)
     validate_ledger(combined)
-    assert_acceptance_baseline(
-        combined.loc[combined["record_type"].eq("backtest")], EXPECTED_BASELINE
-    )
+    assert_historical_baseline(combined.loc[combined["record_type"].eq("backtest")])
     payload = _validated_parquet_bytes(combined)
     original = args.ledger.read_bytes()
     changed = _digest(payload) != _digest(original)
