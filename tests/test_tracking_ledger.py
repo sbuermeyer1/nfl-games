@@ -352,22 +352,46 @@ def test_backtest_conversion_keeps_live_lifecycle_fields_null():
         ("published_total_line", 43.5),
     ],
 )
-def test_validate_ledger_rejects_published_lines_on_backtest(column, value):
+def test_validate_ledger_rejects_published_lines_on_an_unpublished_row(column, value):
+    """A row with no publication lifecycle cannot carry a published line.
+
+    This used to be keyed on record_type == "backtest". Backtest rows graded at an early line
+    now legitimately carry published lines, so the rule is keyed on the publication status
+    instead -- which is what actually distinguishes the two cases.
+    """
     ledger = grade_ledger(
         facts(
             {
                 "record_type": "backtest",
+                "official_spread_line": 3.0,
+                "official_total_line": 44.0,
                 "closing_spread_line": 3.0,
                 "closing_total_line": 44.0,
                 "published_spread_line": np.nan,
                 "published_total_line": np.nan,
                 "published_at": pd.NaT,
+                "spread_publication_status": pd.NA,
+                "total_publication_status": pd.NA,
+                "published_spread_observed_at": pd.NaT,
+                "published_total_observed_at": pd.NaT,
+                "closing_spread_observed_at": pd.NaT,
+                "closing_total_observed_at": pd.NaT,
+                "current_kickoff_at": pd.NaT,
             }
         )
     )
     ledger.loc[0, column] = value
 
     with pytest.raises(ValueError, match="published"):
+        validate_ledger(ledger)
+
+
+def test_validate_ledger_rejects_a_published_row_whose_official_line_drifts():
+    """The mirror of the rule above: once published, official must equal the published number."""
+    ledger = grade_ledger(facts({"record_type": "live"}))
+    ledger.loc[0, "official_spread_line"] = 99.0
+
+    with pytest.raises(ValueError, match="published official"):
         validate_ledger(ledger)
 
 
@@ -396,6 +420,7 @@ def _early_lines() -> pd.DataFrame:
             "game_id": ["2025_01_AAA_BBB"],
             "early_spread_line": [3.0],
             "early_total_line": [43.0],
+            "snapshot_at": [pd.Timestamp("2025-09-02T00:20:00Z")],
         }
     )
 

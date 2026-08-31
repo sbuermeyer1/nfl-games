@@ -263,7 +263,7 @@ def build_backtest_ledger(predictions, model_version=HISTORICAL_MODEL_VERSION, e
 
 def _apply_early_lines(facts, early_lines):
     """Publish each game at its early line, and mark the unpriced ones excluded."""
-    required = {"game_id", "early_spread_line", "early_total_line"}
+    required = {"game_id", "early_spread_line", "early_total_line", "snapshot_at"}
     missing = sorted(required.difference(early_lines.columns))
     if missing:
         raise ValueError(f"early_lines is missing required column(s) {missing}")
@@ -271,12 +271,16 @@ def _apply_early_lines(facts, early_lines):
         raise ValueError("early_lines contains duplicate game_id values")
 
     lookup = early_lines.drop_duplicates("game_id").set_index("game_id")
+    observed = pd.to_datetime(facts["game_id"].map(lookup["snapshot_at"]), utc=True)
+    facts["published_at"] = observed
     for kind, column in (("spread", "early_spread_line"), ("total", "early_total_line")):
         early = facts["game_id"].map(lookup[column]).astype(float)
+        priced = early.notna()
         facts[f"official_{kind}_line"] = early
         facts[f"published_{kind}_line"] = early
-        facts[f"{kind}_publication_status"] = np.where(early.notna(), "published", "excluded")
-        facts[f"{kind}_exclusion_reason"] = np.where(early.notna(), None, "no_early_line")
+        facts[f"{kind}_publication_status"] = np.where(priced, "published", "excluded")
+        facts[f"{kind}_exclusion_reason"] = np.where(priced, None, "no_early_line")
+        facts[f"published_{kind}_observed_at"] = observed.where(priced)
 
 
 def _same_values(actual, expected):
@@ -402,17 +406,28 @@ def validate_ledger(ledger):
 
     backtest = ledger["record_type"].eq("backtest")
     live = ledger["record_type"].eq("live")
+    # A row that went through publication -- live, or a backtest row graded at its early line --
+    # is identified by carrying a publication status, not by its record type.
+    publishing = ledger[["spread_publication_status", "total_publication_status"]].notna().any(
+        axis=1
+    )
+    unpublished = ~publishing
     for official, closing in (
         ("official_spread_line", "closing_spread_line"),
         ("official_total_line", "closing_total_line"),
     ):
-        if not _same_values(ledger.loc[backtest, official], ledger.loc[backtest, closing]).all():
-            raise ValueError("backtest official and closing lines must match")
+        if not _same_values(
+            ledger.loc[unpublished, official], ledger.loc[unpublished, closing]
+        ).all():
+            raise ValueError("unpublished official and closing lines must match")
     published_fields = ["published_spread_line", "published_total_line", "published_at"]
-    if ledger.loc[backtest, published_fields].notna().any().any():
-        raise ValueError("backtest rows cannot have published snapshot fields")
-    if ledger.loc[backtest, _LIVE_ONLY_COLUMNS].notna().any().any():
-        raise ValueError("backtest rows cannot have live-only fields")
+    if ledger.loc[unpublished, published_fields].notna().any().any():
+        raise ValueError("unpublished rows cannot have published snapshot fields")
+    if ledger.loc[unpublished, _LIVE_ONLY_COLUMNS].notna().any().any():
+        raise ValueError("unpublished rows cannot have live-only fields")
+    # A backtest row never has a live lifecycle, whether or not it was graded at an early line.
+    if ledger.loc[backtest, ["current_kickoff_at", "void_reason"]].notna().any().any():
+        raise ValueError("backtest rows cannot have live lifecycle fields")
 
     _validate_utc_timestamps(ledger)
     if ledger.loc[live, "current_kickoff_at"].isna().any():
@@ -421,13 +436,15 @@ def validate_ledger(ledger):
         raise ValueError("void reason must be null or a nonblank string")
 
     for kind in ("spread", "total"):
-        _validate_market_publication(ledger, live, kind)
+        _validate_market_publication(ledger, publishing, kind)
 
     for official, published in (
         ("official_spread_line", "published_spread_line"),
         ("official_total_line", "published_total_line"),
     ):
-        if not _same_values(ledger.loc[live, official], ledger.loc[live, published]).all():
-            raise ValueError("live official and published lines must match")
+        if not _same_values(
+            ledger.loc[publishing, official], ledger.loc[publishing, published]
+        ).all():
+            raise ValueError("published official and published lines must match")
 
     _validate_derived(ledger)
