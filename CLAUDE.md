@@ -286,19 +286,58 @@ doesn't already contain.
 **The current result is that the model ties the CLOSING line without beating it, and that is
 the success case, not a failure.** Do not "improve" it into an edge against the close.
 
-**But it does beat the EARLY line, and that is a different measurement.** Against the number
-posted ~4 days out, the model shows closing-line value of **+0.254 pts on spreads at edge >= 1
-(z = 4.30)** and **+0.267 at edge >= 2 (z = 3.68), positive in all five seasons**; totals are
-stronger still (edge >= 1 at z = 5.80). Measured over 1,178 joined and priced games by
-`scripts/analyze_line_value.py`, using line history reconstructed from the `nflverse/nfldata`
-git history. These two statements are consistent: the model anticipates part of the movement
-between the early number and the close, and none of what remains at the close.
+**It also beats the EARLY line, but by far less than this file used to claim.** At the lead the
+tracker actually publishes at -- a true 5 days before each game's own kickoff -- closing-line
+value on spreads is **+0.1444 at edge >= 2 (z = 2.41, n = 703)**, out of 1,345 priced games in
+the corpus, measured by
+`scripts/analyze_line_value.py` against `line_history_combined_g05.parquet`. Totals are the
+stronger side. The model anticipates a little of the movement between the early number and the
+close, and none of what remains at the close.
+
+> **CORRECTION (2026-08-31): the figures previously here (+0.254 at edge >= 1, +0.267 at
+> edge >= 2, "about 55% of the way" to break-even) were measured at the wrong lead and are
+> withdrawn.**
+>
+> **Mechanism.** `snapshot_timestamps` (`src/nfl_game/data/line_history.py`) takes one snapshot
+> per (season, week), `days_before` ahead of **that week's first kickoff**. That is deliberate
+> and correct for its own purpose -- it guarantees no game in the week has been played yet --
+> but `PUBLISH_BEFORE` is measured from **each game's own kickoff**. Since the week's first
+> game is usually Thursday night, a Sunday game's "5-day" snapshot sat ~7.7 days out.
+>
+> **Measured over 1,359 games:** the `_d05` cache has a mean lead of **7.51 days** (median 7.70,
+> max 10.30). Only **98 of 1,359 (7%)** are within 0.1 days of a true 5-day lead; 1,139 are at
+> 7 days or more. The file name asserted a property nobody had measured.
+>
+> **Re-measured at true per-game leads** (`--anchor game`, cache files tagged `_g<lead>`), on a
+> fixed common set of 778 games with the model and games held constant so only the line changes:
+>
+> | true lead | CLV edge >= 2 | z |
+> | --- | --- | --- |
+> | 5d | +0.1280 | 1.86 |
+> | 7d | +0.4123 | 4.32 |
+> | 9d | +0.5103 | 5.02 |
+> | 11d | +0.5445 | 5.18 |
+>
+> **Publishing earlier does NOT recover this, and the table above is itself contaminated.** It
+> gave every arm current features -- week N-1 results that do not exist 9 days before a week-N
+> game. Re-run with ratings lagged one week (`build_ratings(asof_week=W-1)`), which is what a
+> 9-day lock would actually have, on a fixed 465-game set at edge >= 2: **5d +0.1409 (z 2.10)
+> vs 9d +0.0032 (z 0.03)**. The entire apparent gain was look-ahead. One week of staleness
+> costs only +0.0044 margin MAE, so it barely moves average accuracy -- it corrupts the tail,
+> which is exactly where you bet.
+>
+> **Conclusion: the 5-day lock is roughly the right choice, but at ~30% of break-even, not
+> 98%, and no publishable lead does better.** Do not reopen the lock length without new
+> evidence, and do not quote any figure from a `_d<lead>` cache as a lead-specific result.
 
 Do not evaluate this model by its ATS record. At ~141 qualified picks a season, demonstrating
 a true 54% needs roughly **27 seasons**; the closing-line ATS figures (0.4977 at 0+, 0.4752 at
-2+) are noise plus vig. CLV is continuous and resolved the same question at z > 4 on 1,178
-games. **1 spread point = 4.93% win probability** and break-even at -110 needs ~0.48 points,
-so +0.267 is about 55% of the way there — real, but not yet an edge on its own.
+2+) are noise plus vig. CLV is continuous and answers the same question on far less data --
+though at the corrected lead it resolves at **z = 2.41 at edge >= 2** (3.39 across all
+predictions), not the z > 4 this file claimed before the anchoring fix.
+**1 spread point = 4.93% win probability** and break-even at -110 needs ~0.48 points,
+so the corrected +0.1444 is about **30%** of the way there — real, but well short of an edge,
+and not a gap the publication lead can close.
 
 ### Regression baseline
 
@@ -319,13 +358,22 @@ leave them untouched. If they move, stop and find out why before going further �
 the paragraph above before judging the direction, because a number that looks like an
 improvement is the one that most needs auditing.
 
+**The tracker ledger reports a DIFFERENT ATS number, and that is not a regression.** Since
+2026-08-31 `data/processed/tracker_ledger.parquet` grades the historical corpus at the true
+5-day line, so it reads **0.4947 (n=1316)** with 14 games excluded for having no line at
+publication. The 0.4977 above is `scripts/backtest.py`, which still grades at the close and is
+unchanged. Both are pinned: `EXPECTED_BASELINE` holds the closing record, `EXPECTED_EARLY_BASELINE`
+the early one, and `assert_historical_baseline` picks whichever a given corpus carries by
+inspecting it. `scripts/build_tracker.py --no-early-lines` reproduces the old closing-line ledger.
+
 ### Line shopping is worth more than the model
 
 Measured by `scripts/analyze_key_numbers.py` on the same 1,359-game corpus. **Getting half a
 point better than the number you bet changes 4.56% of outcomes and is worth +4.34% EV per bet
-at -110** — against the model's own ~1.32% (its +0.267 points of early-line value at
-4.93% per point). Half a point of shopping is roughly **3.3x the entire model edge**, costs
-nothing, and requires no modelling.
+at -110** — against the model's own **~0.71%** (its corrected +0.1444 points of early-line
+value at 4.93% per point). Half a point of shopping is roughly **6x the entire model edge**,
+costs nothing, and requires no modelling. The anchoring correction of 2026-08-31 roughly
+doubled this ratio: it was recorded as 3.3x when the model's edge was thought to be +0.267.
 
 The value is concentrated on one number, because NFL margins are not smooth:
 

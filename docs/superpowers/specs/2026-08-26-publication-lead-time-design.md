@@ -1,8 +1,28 @@
 # Publication lead time: move the pick lock from 24 hours to 4 days
 
 **Date:** 2026-08-26
-**Status:** implemented, then **SUPERSEDED on 2026-08-27 — the lock is now 5 days.**
+**Status:** implemented, then **SUPERSEDED on 2026-08-27 (the lock is now 5 days)**, and its
+CLV evidence **WITHDRAWN on 2026-08-31 — every lead figure below was measured at the wrong lead.**
 **Branch at time of writing:** `research/line-value`
+
+> ## Evidence withdrawn 2026-08-31: every lead figure below is mislabelled
+>
+> The d04/d05/d06 caches were built by `snapshot_timestamps`, which anchors ONE snapshot per
+> week to **that week's first kickoff**. `PUBLISH_BEFORE` is measured from **each game's own
+> kickoff**. Measured over 1,359 games, the `_d05` cache has a mean lead of **7.51 days**, not
+> 5 — only 98 of 1,359 games are within 0.1 days of a true 5-day lead.
+>
+> So "0.2431 at 4 days" and "0.4717 at 5 days" describe roughly 6.5- and 7.5-day leads. The
+> **direction** of the finding survives (more lead gave more CLV across these arms), but the
+> **labels do not**, and the lock the code implements is shorter than any arm measured here.
+>
+> Re-measured at true per-game leads: **5d +0.1280, 7d +0.4123, 9d +0.5103, 11d +0.5445**
+> (edge >= 2, fixed 778-game common set). And publishing earlier does not help in practice —
+> those longer-lead arms were using week N-1 results that do not exist that far out. With
+> correctly lagged ratings, 9d scores **+0.0032 (z 0.03)** against 5d's +0.1409.
+>
+> **The 5-day lock stands. Its justification does not.** Do not cite any number below as a
+> lead-specific result. See CLAUDE.md, "It also beats the EARLY line".
 
 > ## Superseded: the lock is 5 days, not 4
 >

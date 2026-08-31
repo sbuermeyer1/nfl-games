@@ -4,9 +4,15 @@
 
 That is the moment the 5-day lock opens on `2026_01_NE_SEA`, the season's first game
 (kickoff 2026-09-10 00:20 UTC). It is the deadline for capturing the opener at the **full
-5-day lead**, which is the whole point of the lock: measured CLV at edge>=2 runs 0.2431 at a
-4-day lead and 0.4717 at 5 days (51% vs 98% of break-even). Publish later and the record is
-frozen against a line that has already moved toward close.
+5-day lead**. Publish later and the record is frozen against a line that has already moved
+toward the close.
+
+**Corrected 2026-08-31:** this used to say the 5-day lead reaches "98% of break-even" (CLV
+0.2431 at 4 days vs 0.4717 at 5). Those came from a line-history cache anchored to each week's
+FIRST kickoff, so the file called `_d05` held a mean 7.51-day lead, not 5. At a true per-game
+5-day lead the figure is **+0.1444 at edge>=2 (z=2.41)**, about **30%** of the ~0.483 needed.
+Publishing earlier does not recover it -- a 9-day arm with the features it would actually have
+scores +0.003 (z=0.03). The lock length is still right; the level is much lower. See CLAUDE.md.
 
 **Correction (2026-08-31): a late flip does NOT lose the opener.** This file previously said
 "the opener is never recorded ... a late flip cannot backfill it". That is wrong. The gate at
