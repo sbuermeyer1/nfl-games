@@ -170,3 +170,135 @@ def test_empty_history_returns_documented_numeric_feature_schema():
     out = qb_features_for_targets(pd.DataFrame(), pd.DataFrame(), _schedules(), [(2024, 2)])
     assert list(out.columns) == ["season", "week", "team", "expected_starter_id", *QB_FEATURE_COLS]
     assert set(out["team"]) == {"BUF", "MIA"}
+
+
+def _cutoff_fixture():
+    """A team whose QB1 changes between Tuesday and Sunday kickoff."""
+    schedules = pd.DataFrame(
+        {
+            "season": [2025],
+            "week": [5],
+            "home_team": ["BAL"],
+            "away_team": ["CIN"],
+            "kickoff_at": [pd.Timestamp("2025-10-05 17:00", tz="UTC")],
+        }
+    )
+    # 2025-era feed: daily `dt` snapshots, `pos_rank`, `club_code`, `pos_abb`.
+    depth = pd.DataFrame(
+        {
+            "club_code": ["BAL", "BAL", "BAL", "BAL", "CIN", "CIN"],
+            "gsis_id": ["LAMAR", "HUNT", "LAMAR", "HUNT", "BURROW", "BURROW"],
+            "pos_abb": ["QB", "QB", "QB", "QB", "QB", "QB"],
+            "pos_rank": [1.0, 2.0, 2.0, 1.0, 1.0, 1.0],
+            "dt": pd.to_datetime(
+                [
+                    "2025-09-30 12:00",  # Tuesday: Lamar QB1
+                    "2025-09-30 12:00",
+                    "2025-10-04 12:00",  # Saturday: Huntley QB1
+                    "2025-10-04 12:00",
+                    "2025-09-30 12:00",
+                    "2025-10-04 12:00",
+                ],
+                utc=True,
+            ),
+        }
+    )
+    stats = pd.DataFrame(
+        {
+            "season": [2025] * 3,
+            "week": [4, 4, 4],
+            "team": ["BAL", "BAL", "CIN"],
+            "player_id": ["LAMAR", "HUNT", "BURROW"],
+            "position": ["QB", "QB", "QB"],
+            "season_type": ["REG"] * 3,
+            "attempts": [30.0, 0.0, 30.0],
+            "sacks_suffered": [2.0, 0.0, 2.0],
+            "passing_epa": [12.0, 0.0, 8.0],
+            "passing_cpoe": [3.0, 0.0, 1.0],
+            "passing_interceptions": [0.0, 0.0, 1.0],
+        }
+    )
+    return stats, depth, schedules
+
+
+def test_cutoff_at_kickoff_sees_the_late_change():
+    stats, depth, schedules = _cutoff_fixture()
+    out = qb_features_for_targets(
+        qb_week_stats(stats), depth, schedules, [(2025, 5)], cutoff=None
+    ).set_index("team")
+    assert out.loc["BAL", "expected_starter_id"] == "HUNT"
+
+
+def test_cutoff_at_publication_lead_sees_the_earlier_chart():
+    stats, depth, schedules = _cutoff_fixture()
+    out = qb_features_for_targets(
+        qb_week_stats(stats),
+        depth,
+        schedules,
+        [(2025, 5)],
+        cutoff=pd.Timedelta(days=5),
+    ).set_index("team")
+    assert out.loc["BAL", "expected_starter_id"] == "LAMAR"
+
+
+def test_cutoff_accepts_an_absolute_instant():
+    stats, depth, schedules = _cutoff_fixture()
+    out = qb_features_for_targets(
+        qb_week_stats(stats),
+        depth,
+        schedules,
+        [(2025, 5)],
+        cutoff=pd.Timestamp("2025-10-04 18:00", tz="UTC"),
+    ).set_index("team")
+    assert out.loc["BAL", "expected_starter_id"] == "HUNT"
+
+
+def test_naive_absolute_cutoff_raises():
+    stats, depth, schedules = _cutoff_fixture()
+    with pytest.raises(ValueError, match="timezone-aware"):
+        qb_features_for_targets(
+            qb_week_stats(stats),
+            depth,
+            schedules,
+            [(2025, 5)],
+            cutoff=pd.Timestamp("2025-10-04 18:00"),
+        )
+
+
+def _pre2025_era_fixture():
+    """The OTHER feed era: week-labelled charts, no `dt`, `team`/`position`/`depth_team`.
+
+    The two eras share almost no columns, and `chart_as_of` takes a different branch for
+    each -- the timestamped branch filters on `dt <= cutoff`, the labelled branch matches
+    season/week and cannot see a cutoff at all. A test that exercises only the 2025-era
+    feed leaves the entire labelled branch unpinned.
+    """
+    _, _, schedules = _cutoff_fixture()
+    depth = pd.DataFrame(
+        {
+            "season": [2019, 2019, 2019, 2019],
+            "week": [5, 5, 5, 5],
+            "team": ["BAL", "BAL", "CIN", "CIN"],
+            "player_id": ["LAMAR", "HUNT", "BURROW", "OTHER"],
+            "position": ["QB", "QB", "QB", "QB"],
+            "depth_team": ["1", "2", "1", "2"],
+        }
+    )
+    schedules = schedules.assign(
+        season=2019, kickoff_at=[pd.Timestamp("2019-10-06 17:00", tz="UTC")]
+    )
+    return depth, schedules
+
+
+def test_labelled_era_resolves_a_starter_at_both_cutoffs():
+    stats, _, _ = _cutoff_fixture()
+    depth, schedules = _pre2025_era_fixture()
+    weeks = qb_week_stats(stats.assign(season=2019, week=4))
+    for cutoff in (None, pd.Timedelta(days=5)):
+        out = qb_features_for_targets(
+            weeks, depth, schedules, [(2019, 5)], cutoff=cutoff
+        ).set_index("team")
+        # The labelled era carries no timestamp, so the chart is the same at both
+        # cutoffs -- but it must still RESOLVE rather than falling through to null.
+        assert out.loc["BAL", "expected_starter_id"] == "LAMAR", cutoff
+        assert out.loc["BAL", "qb_uncertain"] == 0, cutoff
