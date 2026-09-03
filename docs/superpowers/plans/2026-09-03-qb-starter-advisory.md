@@ -1510,6 +1510,11 @@ Record the two printed column lists in this plan file under this step, verbatim.
 
 This runs in CI without a network. It pins the hand-written fixtures against the column spellings `depth.py` actually coalesces, so a future feed rename that updates `depth.py` but not the fixtures fails loudly.
 
+**The column sets must be DERIVED from the real fixture builders, never retyped as
+constants.** A hand-maintained copy of a fixture's columns is a constant compared against a
+constant: it passes whatever the fixture actually does, and drifts from it silently — which
+is precisely the failure this task exists to catch.
+
 ```python
 from nfl_game.ratings.depth import (
     _PLAYER_SOURCES,
@@ -1517,28 +1522,54 @@ from nfl_game.ratings.depth import (
     _RANK_SOURCES,
     _TEAM_SOURCES,
 )
+from tests.test_qb import _cutoff_fixture, _pre2025_era_fixture
 
-# The exact column spellings the hand-written fixtures in tests/test_qb.py,
-# tests/test_starters.py and tests/test_live_starters.py use for each era.
-TIMESTAMPED_FIXTURE_COLUMNS = {"club_code", "gsis_id", "pos_abb", "pos_rank", "dt"}
-LABELLED_FIXTURE_COLUMNS = {"season", "week", "team", "player_id", "position", "depth_team"}
+
+def _timestamped_fixture_columns() -> set[str]:
+    _, depth, _ = _cutoff_fixture()
+    return set(depth.columns)
+
+
+def _labelled_fixture_columns() -> set[str]:
+    depth, _ = _pre2025_era_fixture()
+    return set(depth.columns)
 
 
 def test_each_fixture_column_is_one_depth_py_actually_reads():
+    """A fixture column that depth.py never coalesces is decoration, not a fixture.
+
+    The sets come from the fixture builders themselves, so renaming a column in
+    tests/test_qb.py without updating depth.py fails HERE.
+    """
     known = set(_TEAM_SOURCES) | set(_POSITION_SOURCES) | set(_PLAYER_SOURCES)
     known |= set(_RANK_SOURCES) | {"dt", "season", "week"}
-    for columns in (TIMESTAMPED_FIXTURE_COLUMNS, LABELLED_FIXTURE_COLUMNS):
+    for columns in (_timestamped_fixture_columns(), _labelled_fixture_columns()):
         assert columns <= known, sorted(columns - known)
 
 
 def test_the_two_fixture_eras_are_genuinely_disjoint_on_identity():
-    # If these overlap, one "era" fixture is really the other wearing a different hat,
-    # and the era branch it claims to exercise is not being exercised at all.
+    """If the two fixtures share an identity spelling, one is not a separate era.
+
+    `chart_as_of` branches on which era a row belongs to. Two fixtures that both
+    spell the team `team` exercise one branch twice and leave the other unpinned.
+    """
     identity = {"club_code", "team", "gsis_id", "player_id", "pos_abb", "position"}
-    assert not (
-        TIMESTAMPED_FIXTURE_COLUMNS & LABELLED_FIXTURE_COLUMNS & identity
-    )
+    shared = _timestamped_fixture_columns() & _labelled_fixture_columns() & identity
+    assert not shared, sorted(shared)
+
+
+def test_the_fixtures_are_not_accidentally_identical():
+    """A guard on the guard: if someone makes both fixtures the same, say so.
+
+    Without this, pointing both helpers at one builder would satisfy every
+    assertion above by making the intersection trivially empty of identity columns.
+    """
+    assert _timestamped_fixture_columns() != _labelled_fixture_columns()
 ```
+
+For the import from `tests.test_qb` to work, confirm `tests/` is importable (there is a
+`tests/__init__.py`, or `pythonpath`/`rootdir` config in `pyproject.toml`). If it is not,
+add `tests/__init__.py` as part of this task rather than falling back to retyped constants.
 
 - [ ] **Step 3: Run**
 
