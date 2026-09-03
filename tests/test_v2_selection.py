@@ -641,3 +641,121 @@ def test_c5_enters_the_grid_only_when_eligibility_is_explicitly_true(eligible, e
         target_fitter=fitter,
     )
     assert any(call["config"].candidate == "C5" for call in fitter.calls) is expected
+
+
+def _rows_for_seasons(config, by_season: dict[int, float], n_games: int = 200):
+    return [
+        {"config": config, "validation_season": season, "mae": mae, "n_games": n_games}
+        for season, mae in sorted(by_season.items())
+    ]
+
+
+def test_candidates_are_scored_on_the_season_set_they_all_share():
+    """The 2026-08-25 defect: C0 was allowed to skip degenerate seasons and its rivals were not.
+
+    `_inner_evaluations` lets C0 `continue` past a DegenerateFeatureError while any other
+    candidate re-raises, so in the real run C0 was scored from 2019 while C1-C5 carried 2017 and
+    2018 as well -- seasons whose MAE runs 17-25. A plain mean over each config's own seasons
+    then compares an easy denominator against a hard one, and C0 wins on the cut rather than on
+    merit.
+
+    Shaped exactly like that here: C2 is worse than C0 on the two catastrophic seasons it alone
+    is charged for, and better than C0 on every season the two share.
+    """
+    c0 = _config("C0")
+    c2 = _config("C2")
+    scores = pd.DataFrame(
+        [
+            *_rows_for_seasons(c0, {2019: 10.0, 2020: 10.0, 2021: 10.0}),
+            *_rows_for_seasons(c2, {2017: 20.0, 2018: 20.0, 2019: 9.0, 2020: 9.0, 2021: 9.0}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    # Scored on their own season sets C0 wins 10.00 to 13.40; on the shared set C2 wins 9.0.
+    assert selected.config.candidate == "C2"
+    assert selected.mean_inner_mae == pytest.approx(9.0)
+    assert selected.validation_seasons == (2019, 2020, 2021)
+
+
+def test_a_config_scored_on_no_shared_season_is_ineligible():
+    """A candidate that shares nothing with the others cannot be compared, so it cannot win."""
+    scores = pd.DataFrame(
+        [
+            *_rows_for_seasons(_config("C0"), {2019: 1.0, 2020: 1.0, 2021: 1.0}),
+            *_rows_for_seasons(_config("C4"), {2016: 0.001, 2017: 0.001}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    assert selected.config.candidate == "C0"
+
+
+def test_common_season_set_still_applies_the_eligibility_floors():
+    """Intersecting must not smuggle in a config that no longer clears MIN_INNER_SEASONS."""
+    scores = pd.DataFrame(
+        [
+            *_rows_for_seasons(_config("C0"), {2019: 5.0, 2020: 5.0, 2021: 5.0}),
+            *_rows_for_seasons(_config("C4"), {2021: 0.001}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    assert selected.config.candidate == "C0"
+    assert selected.validation_seasons == (2019, 2020, 2021)
+
+
+def test_reference_uses_the_intersection_across_c0_variants_not_their_union():
+    """Every reference season must be one that EVERY C0 variant actually has.
+
+    With a union, a season only one C0 variant could fit becomes reference ground, and the other
+    variant is then scored on a set it never faced -- reintroducing the unequal comparison this
+    fix exists to remove. A single-C0 fixture cannot tell union from intersection, so this one
+    carries two.
+    """
+    c0_a = _config("C0", alpha=1.0)
+    c0_b = replace(c0_a, alpha=10.0)
+    c2 = _config("C2")
+    scores = pd.DataFrame(
+        [
+            # Only this C0 variant reaches 2018, and it is catastrophic there.
+            *_rows_for_seasons(c0_a, {2018: 30.0, 2019: 10.0, 2020: 10.0}),
+            *_rows_for_seasons(c0_b, {2019: 10.0, 2020: 10.0}),
+            *_rows_for_seasons(c2, {2018: 1.0, 2019: 9.5, 2020: 9.5}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    # Intersection across C0 variants is {2019, 2020}; 2018 is not shared and must not count.
+    assert selected.validation_seasons == (2019, 2020)
+    assert selected.config.candidate == "C2"
+    assert selected.mean_inner_mae == pytest.approx(9.5)
+
+
+def test_eligibility_floors_apply_after_restriction_not_before():
+    """A config that clears the floors only on seasons nobody else faced must stay ineligible.
+
+    This is the dangerous shape: C4 has three seasons and 600 games, so it passes the floors on
+    its own rows, but shares just ONE season with the baseline. Scored on that single shared
+    season it has a flattering 0.001 MAE and would win outright.
+    """
+    scores = pd.DataFrame(
+        [
+            *_rows_for_seasons(_config("C0"), {2019: 5.0, 2020: 5.0, 2021: 5.0}),
+            *_rows_for_seasons(_config("C4"), {2016: 0.001, 2017: 0.001, 2021: 0.001}),
+        ]
+    )
+
+    selected = select_target_config(scores, target="margin")
+
+    assert selected is not None
+    assert selected.config.candidate == "C0"
+    assert selected.mean_inner_mae == pytest.approx(5.0)

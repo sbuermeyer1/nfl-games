@@ -82,67 +82,87 @@ hashed -- `retrieved_at` records when we fetched, `latest_event_at` is a propert
 data itself. `_validate_artifacts` recomputes the digests from the stored manifest, which
 makes it an internal integrity check against a tampered file, not a cross-run signal.
 
-### The Ridge-v2 experiment result: the challenger TIES Ridge v1 exactly
+### The Ridge-v2 experiment result: C1 wins margin, loses totals
 
-Run 2026-08-25 on the locked artifact. **Gates 3, 4, 5, 6 and 9 FAIL, so Ridge v1 remains
-official** and nothing about the shipped model, tracker or website changes.
+Re-run **2026-09-02** on a rebuilt artifact, with the nested selection scoring every candidate on
+a common fold set. **Gates 2, 4, 5, 6 and 9 FAIL, so Ridge v1 remains official** and nothing
+about the shipped model, tracker or website changes.
 
-**The headline is in the selections, not the gate table.** The nested selection chose **C0 --
-the exact Ridge-v1 schema -- for both targets in all five evaluation seasons**, so the
-challenger reproduces the champion: all **1,359 outer predictions are bit-identical** to
-Ridge v1 (max absolute difference 0.0), and margin MAE agrees to full float precision at
-10.273977625706554. Per-season improvement is exactly 0.0000 in every season. None of the
-Ridge-v2 blocks -- ratings, quarterback, style, personnel continuity, PFR -- earned selection
-in a single evaluation season. Only the 2019 and 2020 calibration seeds picked non-C0
-configurations (C4/C1), on two or three seasons of training data, with an inner margin MAE
-of 25.0 and 20.3.
+**The nested selection chose C1 -- the ratings block -- for both targets in all five evaluation
+seasons.** Margin MAE is **10.226035** against Ridge-v1's **10.273977**, improving in **4 of 5**
+outer seasons (2022 +0.1185, 2025 +0.0577, 2023 +0.0334, 2024 +0.0312, 2021 -0.0009), with a
+paired improvement of +0.047942 whose lower90 is **positive** at +0.005137. Total MAE is
+**10.708184** against **10.683825** -- worse, improving in only 2 of 5, paired lower90 -0.071877.
 
-> **CORRECTION (2026-08-26): the selection was not a fair test, so "no v2 block helps" is NOT
-> supported.** The sentences above describe what the selection *did*, and the tie itself is
-> real. What does not follow is the merit verdict — the blocks were never given an equal
-> comparison, and the earlier "overfitting, not signal" reading of 2019/2020 is part of what
-> is now in doubt.
->
-> **Mechanism.** In `_inner_evaluations` (`src/nfl_game/experiments/v2_selection.py:337`) a
-> `DegenerateFeatureError` re-raises for every candidate *except* C0, which is allowed to
-> `continue` and silently drop that validation season. `mean_inner_mae`
-> (`v2_selection.py:118`) is then a plain `np.mean` over whatever seasons each config happens
-> to have. C0 is therefore scored on an easier season set than its challengers.
->
-> **Evidence in the committed artifact.** In `data/processed/ridge_v2_evaluation.json` every
-> C0 selection (2021-2025) records `validation_seasons` beginning at **2019**, while the
-> non-C0 selections (2019, 2020) begin at **2017**. The 2017 and 2018 slices run MAE 17-25,
-> so C1-C5 carried two catastrophic folds that C0 never faced.
->
-> **Rescored on C0's own season set, a richer candidate wins every fold checked**, by more
-> than the 0.05 tie-break tolerance:
->
-> | fold | as run | on matched seasons |
-> | --- | --- | --- |
-> | 2021 margin | C0 10.5899 | **C2 10.4592** (C1, C3 also beat C0) |
-> | 2021 total | C0 10.9971 | **C2 10.8399** |
-> | 2025 margin | C0 10.3717 | **C3 10.2557** (C1, C2, C4 also beat) |
-> | 2025 total | C0 10.8276 | **C2 10.7762** |
->
-> The 1,359 bit-identical predictions remain correct; only the conclusion drawn from them is
-> withdrawn. Whether the v2 features help is **unknown**, and settling it needs the selection
-> fixed to score every candidate on a common fold set, then a re-run (~22 min). Ridge v1
-> remains official either way — this correction promotes nothing.
+**The margin gain is the schema, not the hyperparameters.** C1 differs from C0 three ways at
+once: schema (27 columns vs 14 on margin), alpha (100.0 vs 1.0), and the estimator path --
+`_default_target_fitter` (`src/nfl_game/experiments/v2_selection.py:266`) hardcodes C0 to
+`GameModel(estimator="ridge", alpha=1.0)` and ignores its `TargetConfig` entirely, so **every
+hyperparameter printed against a C0 selection is inert decoration**. Fitting four arms through
+the same production preprocessing separates them:
 
-**Do not read gates 1 and 2 as evidence of improvement.** They test `< 10.274` and `< 10.684`
--- the *rounded* literals from the recorded baseline -- so a challenger that is bit-identical
-to the champion passes them by 2.2e-05 and 1.8e-04. Those two gates cannot distinguish a tie
-from a win. Gate 9 (Brier) fails by 0.0001 *despite* identical point predictions, because the
-v2 calibrator is seeded on 2019-2020 where the selection did pick C4/C1. Gate 6 fails on the
-margin side only (coefficient -0.0218, the Ridge-v1 value); the total side passes at +0.2924.
+| arm | margin | total |
+| --- | --- | --- |
+| C1 columns, selected alpha | 10.226035 | 10.708184 |
+| C0 columns, selected alpha | 10.271435 (schema **+0.045400**) | 10.689357 (schema **-0.018826**) |
+| C0 columns, alpha=1.0 | 10.273978 (alpha +0.002543) | 10.683825 (alpha -0.005533) |
+| `GameModel` v1 path | 10.273978 (est path 0.000000) | 10.683825 (est path 0.000000) |
 
-**The C1 rating block cannot be ablated**, measured on live data: removing it raises
-`rating variant maps canonical column(s) outside the target schema` for margin and
-`total_points/C1 has no rating-variant canonical columns` for the total. The rating-variant
-contract requires a non-C0 schema to declare its canonical rating columns, and relaxing that
-would change the manifest the experiment exists to measure. Those rows are recorded as
-`not_constructible` with the exact error rather than dropped. Ablations therefore exist only
-for 2019-2020; the C0 seasons have no blocks to remove.
+**95% of the margin gain is the rating-variant schema**; alpha contributes 5% and the estimator
+path exactly nothing. On totals the same block **hurts by 0.018826**. That is a mechanism for the
+totals gate failures rather than noise, and it makes a **target-specific candidate restriction**
+the obvious next experiment -- the search picks C1 for both targets while it only helps one.
+
+Three checks ran before that decomposition was believed: the C1 arm reproduces this run's margin
+and total MAE to five decimals, the alpha=1.0 C0 arm reproduces Ridge-v1's 10.273977625706554,
+and that arm is **bit-identical** to `GameModel` (max absolute difference 0.0, n=272) -- so its
+exact-zero estimator-path effect is a passing control, not the measurement bug an exact-zero
+float difference usually signals. The A-to-D gap of +0.047942 also equals the run's own
+`margin_paired_improvement` to full precision.
+
+**Read gates 1 and 2 with care -- but the margin pass is now real.** Both still test the
+*rounded* literals `< 10.274` and `< 10.684`, which a bit-identical challenger would pass by
+2.2e-05; that remains a design defect. The current margin pass clears it by 0.048, three orders
+of magnitude larger, so it is not a tie artifact. Gate 6 now fails on **both** sides (margin
+coefficient -0.1152, lower90 -0.2796; total +0.1747 but lower90 -0.0072, i.e. barely). Gate 9
+fails by 0.00027 on cover and 0.00016 on over; **the previous explanation for it -- a calibrator
+seeded on 2019-2020 despite identical point predictions -- no longer applies**, because the
+predictions now differ, and the current cause is unmeasured.
+
+> **SUPERSEDED: the 2026-08-25 run and its 2026-08-26 correction.** The original run reported
+> that the challenger *tied* Ridge v1 exactly -- C0 chosen for both targets in all five
+> evaluation seasons, all 1,359 outer predictions bit-identical, margin MAE
+> 10.273977625706554, per-season improvement exactly 0.0000 -- and concluded that "none of the
+> Ridge-v2 blocks earned selection in a single evaluation season". The 2026-08-26 correction
+> withdrew that merit verdict as unsupported but left the question open pending a re-run.
+> **The 2026-09-02 re-run settles it: the claim was false.** C1 wins every evaluation season
+> once the folds are matched. Those historical numbers remain accurate descriptions of what the
+> unfair selection *did*; only the conclusion drawn from them was wrong.
+>
+> **Mechanism, now confirmed and named.** In `_inner_evaluations` a `DegenerateFeatureError`
+> re-raises for every candidate *except* C0, which may `continue` and drop that validation
+> season, and `mean_inner_mae` then averaged each config over whatever seasons it happened to
+> have. The culprit feature is **`ryoe_diff`**: in the 2017 and 2018 training slices it has
+> "fewer than 10 distinct non-binary values", so C0 -- and only C0 -- skipped those two
+> seasons, which run MAE 17-25. Because the guard re-raises for everyone else, the run
+> completing at all proves the challengers never skipped anything. The baseline was excused
+> from the two hard folds by a data-availability problem in a **Ridge-v1** feature.
+>
+> **The fix** (`_reference_seasons`, `v2_selection.py`) scores every config on its own seasons
+> intersected with C0's, and marks a config left under the eligibility floors ineligible rather
+> than scoring it on a set nobody else faced. Two folds act as controls: 2019 reproduces the old
+> run exactly (margin C4 at 24.9997, total C1 at 11.5392), and 2020 now takes the honest C0
+> fallback with an empty validation set instead of crowning C4 at 20.25.
+
+**The C1 rating block still cannot be ablated**, and that is by design, not a defect: removing it
+yields *exactly* the C0 column set (margin C0=14, C1=27, block=13; `kept == C0` on both targets),
+and the rating-variant contract (`v2_config.py:136`) forbids a C1 declaring no rating variants.
+The errors are `rating variant maps canonical column(s) outside the target schema` for margin
+2019 and `<target>/C1 has no rating-variant canonical columns` elsewhere; relaxing the contract
+would change the manifest the experiment exists to measure. Those rows stay recorded as
+`not_constructible` with the exact error rather than dropped. **Attribution therefore comes from
+the four-arm decomposition above, not from the ablation table** -- which still covers only
+C2/C3/C4 in a single season each.
 
 ### FTN charting (E1) was measured separately and REJECTED
 
@@ -160,7 +180,8 @@ Pooled, FTN costs **-0.1315** MAE on margin (worse in 3 of 3 seasons) and **-0.0
 
 **The FTN result stands on its own; do not lean it on the core result.** An earlier version of
 this section called it "consistent with the core result that no v2 block earned selection" —
-that support is withdrawn per the correction above. E1 does not need it: these two arms were
+that support is withdrawn, and the 2026-09-02 re-run went further and **disproved** that core
+claim, so leaning on it would now argue the wrong way. E1 does not need it: these two arms were
 trained on *identical rows* and differ only by the FTN block, so it is a genuine paired
 comparison, unaffected by the unequal-fold defect in the nested selection.
 

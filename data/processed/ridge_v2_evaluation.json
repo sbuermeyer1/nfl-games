@@ -1,5 +1,5 @@
 {
-  "ablation_rows": 10,
+  "ablation_rows": 15,
   "calibration_seasons": [
     2019,
     2020,
@@ -11,16 +11,16 @@
   ],
   "experiment": "locked ridge-v2 research experiment",
   "failures": [
-    "margin season improvement",
+    "total MAE",
     "total season improvement",
-    "margin paired improvement",
     "total paired improvement",
     "margin market contribution",
+    "total market contribution",
     "cover Brier",
     "over Brier"
   ],
   "feature_schema_version": "7627f7bb6d95d56276a5c55da21106ff0d790c372f2cae42a2c3cc24d140cbf5",
-  "features_semantic_sha256": "704dd675e736bcea842618e09208090a82e71e7512c2276fe533f635e20c5fa1",
+  "features_semantic_sha256": "8d8a735645e029c8d7f5c52018831da68878c0c045765cc7cf0e01c756b3054b",
   "gates": {
     "1": {
       "description": "margin MAE below Ridge-v1 10.274",
@@ -51,14 +51,14 @@
       "labels": [
         "total MAE"
       ],
-      "status": "PASS"
+      "status": "FAIL"
     },
     "3": {
       "description": "margin MAE improves in >= 3 of 5 outer seasons",
       "labels": [
         "margin season improvement"
       ],
-      "status": "FAIL"
+      "status": "PASS"
     },
     "4": {
       "description": "total MAE improves in >= 3 of 5 outer seasons",
@@ -143,158 +143,48 @@
   "report": {
     "ats_cohorts": [
       {
-        "hit_rate": 0.497737556561086,
-        "losses": 666,
-        "lower90": 0.47880815590852766,
+        "hit_rate": 0.4924585218702866,
+        "losses": 673,
+        "lower90": 0.4730447987851177,
         "min_edge": 0.0,
         "n": 1326,
         "pushes": 33,
         "total_picks": 1359,
-        "upper90": 0.5165413533834586,
-        "wins": 660
+        "upper90": 0.5116296542204672,
+        "wins": 653
       },
       {
-        "hit_rate": 0.4752475247524752,
-        "losses": 371,
-        "lower90": 0.4513749204198149,
+        "hit_rate": 0.4847161572052402,
+        "losses": 354,
+        "lower90": 0.45710246423488876,
         "min_edge": 2.0,
-        "n": 707,
-        "pushes": 16,
-        "total_picks": 723,
-        "upper90": 0.49927431059506533,
-        "wins": 336
+        "n": 687,
+        "pushes": 18,
+        "total_picks": 705,
+        "upper90": 0.5119417679534816,
+        "wins": 333
       },
       {
         "hit_rate": 0.5,
-        "losses": 102,
-        "lower90": 0.45544554455445546,
+        "losses": 82,
+        "lower90": 0.45085076935602053,
         "min_edge": 5.0,
-        "n": 204,
+        "n": 164,
         "pushes": 4,
-        "total_picks": 208,
-        "upper90": 0.5441176470588235,
-        "wins": 102
-      },
-      {
-        "hit_rate": 0.45,
-        "losses": 11,
-        "lower90": 0.3157894736842105,
-        "min_edge": 10.0,
-        "n": 20,
-        "pushes": 0,
-        "total_picks": 20,
-        "upper90": 0.5789473684210527,
-        "wins": 9
+        "total_picks": 168,
+        "upper90": 0.550299829236329,
+        "wins": 82
       },
       {
         "hit_rate": 0.5,
-        "losses": 1,
-        "lower90": 0.0,
-        "min_edge": 15.0,
-        "n": 2,
-        "pushes": 0,
-        "total_picks": 2,
-        "upper90": 1.0,
-        "wins": 1
-      }
-    ],
-    "ats_hit_rate": 0.497737556561086,
-    "ats_n": 1326,
-    "availability_passed": true,
-    "correctness_passed": true,
-    "cover_brier": 0.2507629428178233,
-    "cover_calibration": {
-      "intercept": -0.014889775311479081,
-      "reliability": [
-        {
-          "lower": 0.3,
-          "mean_probability": 0.39281606089605253,
-          "n": 1,
-          "observed_rate": 0.0,
-          "upper": 0.4
-        },
-        {
-          "lower": 0.4,
-          "mean_probability": 0.4724603907222747,
-          "n": 1297,
-          "observed_rate": 0.49498843484965305,
-          "upper": 0.5
-        },
-        {
-          "lower": 0.5,
-          "mean_probability": 0.5057483025847725,
-          "n": 28,
-          "observed_rate": 0.5714285714285714,
-          "upper": 0.6
-        }
-      ],
-      "slope": 0.0020269163287394195
-    },
-    "determinism_passed": true,
-    "margin_mae": 10.273977625706554,
-    "margin_market_model_coef": -0.021828282494063878,
-    "margin_market_model_coef_lower90": -0.18259918589734708,
-    "margin_market_regression": {
-      "intercept": 0.37608556690221373,
-      "market_coef": 1.0754551011347768,
-      "model_coef": -0.021828282494063878,
-      "model_coef_lower90": -0.18259918589734708,
-      "model_coef_upper90": 0.14194585610818305,
-      "n": 1359,
-      "r2": 0.20830567792287114
-    },
-    "margin_paired_improvement": 0.0,
-    "margin_paired_improvement_lower90": 0.0,
-    "margin_paired_improvement_upper90": 0.0,
-    "margin_rmse": 13.22607458746834,
-    "margin_seasons_improved": 0,
-    "market_margin_mae": 9.752023546725534,
-    "market_total_mae": 10.309050772626932,
-    "n_games": 1359,
-    "ou_cohorts": [
-      {
-        "hit_rate": 0.5022255192878339,
-        "losses": 671,
-        "lower90": 0.4860578939389412,
-        "min_edge": 0.0,
-        "n": 1348,
-        "pushes": 11,
-        "total_picks": 1359,
-        "upper90": 0.5187914517317612,
-        "wins": 677
-      },
-      {
-        "hit_rate": 0.4931506849315068,
-        "losses": 407,
-        "lower90": 0.4724582927746027,
-        "min_edge": 2.0,
-        "n": 803,
-        "pushes": 6,
-        "total_picks": 809,
-        "upper90": 0.5134146341463415,
-        "wins": 396
-      },
-      {
-        "hit_rate": 0.54296875,
-        "losses": 117,
-        "lower90": 0.5,
-        "min_edge": 5.0,
-        "n": 256,
-        "pushes": 1,
-        "total_picks": 257,
-        "upper90": 0.5851560731036713,
-        "wins": 139
-      },
-      {
-        "hit_rate": 0.8,
-        "losses": 2,
-        "lower90": 0.6,
+        "losses": 6,
+        "lower90": 0.3333333333333333,
         "min_edge": 10.0,
-        "n": 10,
-        "pushes": 0,
-        "total_picks": 10,
-        "upper90": 1.0,
-        "wins": 8
+        "n": 12,
+        "pushes": 1,
+        "total_picks": 13,
+        "upper90": 0.6666666666666666,
+        "wins": 6
       },
       {
         "hit_rate": null,
@@ -308,100 +198,210 @@
         "wins": 0
       }
     ],
-    "ou_hit_rate": 0.5022255192878339,
-    "ou_n": 1348,
-    "over_brier": 0.25031526010549615,
-    "over_calibration": {
-      "intercept": -0.09857773168039863,
+    "ats_hit_rate": 0.4924585218702866,
+    "ats_n": 1326,
+    "availability_passed": true,
+    "correctness_passed": true,
+    "cover_brier": 0.2509432025401708,
+    "cover_calibration": {
+      "intercept": -0.024934003431958254,
       "reliability": [
         {
+          "lower": 0.3,
+          "mean_probability": 0.3930609668445488,
+          "n": 3,
+          "observed_rate": 0.6666666666666666,
+          "upper": 0.4
+        },
+        {
           "lower": 0.4,
-          "mean_probability": 0.4838521456878611,
-          "n": 1035,
-          "observed_rate": 0.49082125603864735,
+          "mean_probability": 0.471599395809385,
+          "n": 1282,
+          "observed_rate": 0.49453978159126366,
           "upper": 0.5
         },
         {
           "lower": 0.5,
-          "mean_probability": 0.5082170534143332,
-          "n": 313,
-          "observed_rate": 0.46645367412140576,
+          "mean_probability": 0.50778507029782,
+          "n": 41,
+          "observed_rate": 0.5365853658536586,
           "upper": 0.6
         }
       ],
-      "slope": -0.9329126260767051
+      "slope": -0.08866178945090625
+    },
+    "determinism_passed": true,
+    "margin_mae": 10.226035467453759,
+    "margin_market_model_coef": -0.1152031918073666,
+    "margin_market_model_coef_lower90": -0.27958908496110707,
+    "margin_market_regression": {
+      "intercept": 0.40412679508870675,
+      "market_coef": 1.1478743079859033,
+      "model_coef": -0.1152031918073666,
+      "model_coef_lower90": -0.27958908496110707,
+      "model_coef_upper90": 0.05048864650264563,
+      "n": 1359,
+      "r2": 0.20889965432138824
+    },
+    "margin_paired_improvement": 0.04794215825279693,
+    "margin_paired_improvement_lower90": 0.005137101027386216,
+    "margin_paired_improvement_upper90": 0.09187689293597273,
+    "margin_rmse": 13.205919039585925,
+    "margin_seasons_improved": 4,
+    "market_margin_mae": 9.752023546725534,
+    "market_total_mae": 10.309050772626932,
+    "n_games": 1359,
+    "ou_cohorts": [
+      {
+        "hit_rate": 0.49554896142433236,
+        "losses": 680,
+        "lower90": 0.4786764705882353,
+        "min_edge": 0.0,
+        "n": 1348,
+        "pushes": 11,
+        "total_picks": 1359,
+        "upper90": 0.5129151291512916,
+        "wins": 668
+      },
+      {
+        "hit_rate": 0.4919454770755886,
+        "losses": 410,
+        "lower90": 0.4720812182741117,
+        "min_edge": 2.0,
+        "n": 807,
+        "pushes": 4,
+        "total_picks": 811,
+        "upper90": 0.5119210464061232,
+        "wins": 397
+      },
+      {
+        "hit_rate": 0.5555555555555556,
+        "losses": 112,
+        "lower90": 0.5142857142857142,
+        "min_edge": 5.0,
+        "n": 252,
+        "pushes": 1,
+        "total_picks": 253,
+        "upper90": 0.5965665236051502,
+        "wins": 140
+      },
+      {
+        "hit_rate": 0.6,
+        "losses": 4,
+        "lower90": 0.4444444444444444,
+        "min_edge": 10.0,
+        "n": 10,
+        "pushes": 0,
+        "total_picks": 10,
+        "upper90": 0.7777777777777778,
+        "wins": 6
+      },
+      {
+        "hit_rate": null,
+        "losses": 0,
+        "lower90": null,
+        "min_edge": 15.0,
+        "n": 0,
+        "pushes": 0,
+        "total_picks": 0,
+        "upper90": null,
+        "wins": 0
+      }
+    ],
+    "ou_hit_rate": 0.49554896142433236,
+    "ou_n": 1348,
+    "over_brier": 0.2504607697561739,
+    "over_calibration": {
+      "intercept": -0.10706254154349246,
+      "reliability": [
+        {
+          "lower": 0.4,
+          "mean_probability": 0.48318595561866634,
+          "n": 1054,
+          "observed_rate": 0.48671726755218214,
+          "upper": 0.5
+        },
+        {
+          "lower": 0.5,
+          "mean_probability": 0.5108862949875337,
+          "n": 294,
+          "observed_rate": 0.47959183673469385,
+          "upper": 0.6
+        }
+      ],
+      "slope": -1.1020763133031055
     },
     "per_season": {
       "2021": {
-        "margin_improvement": 0.0,
-        "margin_mae": 11.247633100013893,
-        "margin_rmse": 14.231405005966485,
+        "margin_improvement": -0.0008745560423371046,
+        "margin_mae": 11.24850765605623,
+        "margin_rmse": 14.273544499108743,
         "market_margin_mae": 10.78125,
         "market_total_mae": 10.788602941176471,
         "n_games": 272,
-        "total_improvement": 0.0,
-        "total_mae": 10.986860106818574,
-        "total_rmse": 13.427034034787974,
+        "total_improvement": -0.07615750733668136,
+        "total_mae": 11.063017614155255,
+        "total_rmse": 13.643895280255594,
         "v1_margin_mae": 11.247633100013893,
         "v1_margin_rmse": 14.231405005966485,
         "v1_total_mae": 10.986860106818574,
         "v1_total_rmse": 13.427034034787974
       },
       "2022": {
-        "margin_improvement": 0.0,
-        "margin_mae": 9.255841812448747,
-        "margin_rmse": 12.044705740403026,
+        "margin_improvement": 0.11848392745414316,
+        "margin_mae": 9.137357884994604,
+        "margin_rmse": 11.914967922438777,
         "market_margin_mae": 8.74169741697417,
         "market_total_mae": 10.394833948339484,
         "n_games": 271,
-        "total_improvement": 0.0,
-        "total_mae": 10.976165881851815,
-        "total_rmse": 13.733921826256621,
+        "total_improvement": -0.07898735931840584,
+        "total_mae": 11.05515324117022,
+        "total_rmse": 13.856531946405584,
         "v1_margin_mae": 9.255841812448747,
         "v1_margin_rmse": 12.044705740403026,
         "v1_total_mae": 10.976165881851815,
         "v1_total_rmse": 13.733921826256621
       },
       "2023": {
-        "margin_improvement": 0.0,
-        "margin_mae": 10.427285425793656,
-        "margin_rmse": 13.57924177946379,
+        "margin_improvement": 0.033445055939363755,
+        "margin_mae": 10.393840369854292,
+        "margin_rmse": 13.617904526834346,
         "market_margin_mae": 9.900735294117647,
         "market_total_mae": 10.238970588235293,
         "n_games": 272,
-        "total_improvement": 0.0,
-        "total_mae": 10.897894289896866,
-        "total_rmse": 13.459413772483794,
+        "total_improvement": 0.07786163196215945,
+        "total_mae": 10.820032657934707,
+        "total_rmse": 13.296080171729969,
         "v1_margin_mae": 10.427285425793656,
         "v1_margin_rmse": 13.57924177946379,
         "v1_total_mae": 10.897894289896866,
         "v1_total_rmse": 13.459413772483794
       },
       "2024": {
-        "margin_improvement": 0.0,
-        "margin_mae": 10.119350326518813,
-        "margin_rmse": 13.026831109821783,
+        "margin_improvement": 0.03121311716973274,
+        "margin_mae": 10.08813720934908,
+        "margin_rmse": 13.028110709936874,
         "market_margin_mae": 9.610294117647058,
         "market_total_mae": 9.729779411764707,
         "n_games": 272,
-        "total_improvement": 0.0,
-        "total_mae": 10.110872041180667,
-        "total_rmse": 13.01854977535467,
+        "total_improvement": -0.0634788619390374,
+        "total_mae": 10.174350903119704,
+        "total_rmse": 13.127005019134915,
         "v1_margin_mae": 10.119350326518813,
         "v1_margin_rmse": 13.026831109821783,
         "v1_total_mae": 10.110872041180667,
         "v1_total_rmse": 13.01854977535467
       },
       "2025": {
-        "margin_improvement": 0.0,
-        "margin_mae": 10.316034317385393,
-        "margin_rmse": 13.146616534823375,
+        "margin_improvement": 0.05770259148279244,
+        "margin_mae": 10.2583317259026,
+        "margin_rmse": 13.076036690263901,
         "market_margin_mae": 9.722426470588236,
         "market_total_mae": 10.393382352941176,
         "n_games": 272,
-        "total_improvement": 0.0,
-        "total_mae": 10.448405362904932,
-        "total_rmse": 13.195427496398533,
+        "total_improvement": 0.018766638615176134,
+        "total_mae": 10.429638724289756,
+        "total_rmse": 13.122575990362213,
         "v1_margin_mae": 10.316034317385393,
         "v1_margin_rmse": 13.146616534823375,
         "v1_total_mae": 10.448405362904932,
@@ -416,23 +416,23 @@
       2025
     ],
     "source_reliability_passed": true,
-    "total_mae": 10.683824579690747,
-    "total_market_model_coef": 0.29239972589008845,
-    "total_market_model_coef_lower90": 0.08718820287953248,
+    "total_mae": 10.70818350332669,
+    "total_market_model_coef": 0.1747113184335622,
+    "total_market_model_coef_lower90": -0.007154893362312664,
     "total_market_regression": {
-      "intercept": -3.8399493985419855,
-      "market_coef": 0.7943578652038676,
-      "model_coef": 0.29239972589008845,
-      "model_coef_lower90": 0.08718820287953248,
-      "model_coef_upper90": 0.4990641484670151,
+      "intercept": -0.2950006789481602,
+      "market_coef": 0.8365205591501158,
+      "model_coef": 0.1747113184335622,
+      "model_coef_lower90": -0.007154893362312664,
+      "model_coef_upper90": 0.3605547942264173,
       "n": 1359,
-      "r2": 0.08697567651606486
+      "r2": 0.08547705896907809
     },
-    "total_paired_improvement": 0.0,
-    "total_paired_improvement_lower90": 0.0,
-    "total_paired_improvement_upper90": 0.0,
-    "total_rmse": 13.368823707388882,
-    "total_seasons_improved": 0,
+    "total_paired_improvement": -0.02435892363594468,
+    "total_paired_improvement_lower90": -0.07187721533319179,
+    "total_paired_improvement_upper90": 0.024378905596099364,
+    "total_rmse": 13.412090135550299,
+    "total_seasons_improved": 2,
     "v1_cover_brier": 0.2506691360780712,
     "v1_cover_calibration": {
       "intercept": -0.014886205875497705,
@@ -520,60 +520,52 @@
       ]
     },
     {
-      "alpha": 100.0,
-      "candidate": "C4",
+      "alpha": 1.0,
+      "candidate": "C0",
       "long_halflife": 24,
-      "mean_inner_mae": 20.25263800256989,
-      "prior_season_weight": 0.4,
+      "mean_inner_mae": null,
+      "prior_season_weight": 0.6,
       "season": 2020,
       "short_halflife": 8,
       "target": "margin",
-      "validation_games": 768,
+      "validation_games": 0,
+      "validation_seasons": []
+    },
+    {
+      "alpha": 1.0,
+      "candidate": "C0",
+      "long_halflife": 24,
+      "mean_inner_mae": null,
+      "prior_season_weight": 0.6,
+      "season": 2020,
+      "short_halflife": 8,
+      "target": "total_points",
+      "validation_games": 0,
+      "validation_seasons": []
+    },
+    {
+      "alpha": 100.0,
+      "candidate": "C1",
+      "long_halflife": 24,
+      "mean_inner_mae": 10.483343268677277,
+      "prior_season_weight": 0.4,
+      "season": 2021,
+      "short_halflife": 8,
+      "target": "margin",
+      "validation_games": 512,
       "validation_seasons": [
-        2017,
-        2018,
-        2019
+        2019,
+        2020
       ]
     },
     {
       "alpha": 100.0,
       "candidate": "C1",
-      "long_halflife": 16,
-      "mean_inner_mae": 11.338902308722274,
+      "long_halflife": 32,
+      "mean_inner_mae": 10.868592896741301,
       "prior_season_weight": 0.4,
-      "season": 2020,
-      "short_halflife": 4,
-      "target": "total_points",
-      "validation_games": 768,
-      "validation_seasons": [
-        2017,
-        2018,
-        2019
-      ]
-    },
-    {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.58994460932523,
-      "prior_season_weight": 0.6,
       "season": 2021,
-      "short_halflife": 8,
-      "target": "margin",
-      "validation_games": 512,
-      "validation_seasons": [
-        2019,
-        2020
-      ]
-    },
-    {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.997050599387425,
-      "prior_season_weight": 0.6,
-      "season": 2021,
-      "short_halflife": 8,
+      "short_halflife": 12,
       "target": "total_points",
       "validation_games": 512,
       "validation_seasons": [
@@ -582,13 +574,13 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.80917410622145,
-      "prior_season_weight": 0.6,
+      "alpha": 100.0,
+      "candidate": "C1",
+      "long_halflife": 32,
+      "mean_inner_mae": 10.732869538083682,
+      "prior_season_weight": 0.4,
       "season": 2022,
-      "short_halflife": 8,
+      "short_halflife": 12,
       "target": "margin",
       "validation_games": 784,
       "validation_seasons": [
@@ -598,13 +590,13 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.993653768531141,
-      "prior_season_weight": 0.6,
+      "alpha": 100.0,
+      "candidate": "C1",
+      "long_halflife": 32,
+      "mean_inner_mae": 10.933401135879286,
+      "prior_season_weight": 0.4,
       "season": 2022,
-      "short_halflife": 8,
+      "short_halflife": 12,
       "target": "total_points",
       "validation_games": 784,
       "validation_seasons": [
@@ -614,11 +606,11 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
+      "alpha": 100.0,
+      "candidate": "C1",
       "long_halflife": 24,
-      "mean_inner_mae": 10.420841032778274,
-      "prior_season_weight": 0.6,
+      "mean_inner_mae": 10.331415266730891,
+      "prior_season_weight": 0.4,
       "season": 2023,
       "short_halflife": 8,
       "target": "margin",
@@ -631,13 +623,13 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.98928179686131,
-      "prior_season_weight": 0.6,
+      "alpha": 100.0,
+      "candidate": "C1",
+      "long_halflife": 32,
+      "mean_inner_mae": 10.96383916220202,
+      "prior_season_weight": 0.4,
       "season": 2023,
-      "short_halflife": 8,
+      "short_halflife": 12,
       "target": "total_points",
       "validation_games": 1055,
       "validation_seasons": [
@@ -648,13 +640,13 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.42212991138135,
-      "prior_season_weight": 0.6,
+      "alpha": 100.0,
+      "candidate": "C1",
+      "long_halflife": 32,
+      "mean_inner_mae": 10.342434659773511,
+      "prior_season_weight": 0.4,
       "season": 2024,
-      "short_halflife": 8,
+      "short_halflife": 12,
       "target": "margin",
       "validation_games": 1327,
       "validation_seasons": [
@@ -666,11 +658,11 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
+      "alpha": 100.0,
+      "candidate": "C1",
       "long_halflife": 24,
-      "mean_inner_mae": 10.971004295468422,
-      "prior_season_weight": 0.6,
+      "mean_inner_mae": 10.933035860104235,
+      "prior_season_weight": 0.4,
       "season": 2024,
       "short_halflife": 8,
       "target": "total_points",
@@ -684,13 +676,13 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
-      "long_halflife": 24,
-      "mean_inner_mae": 10.371666647237594,
-      "prior_season_weight": 0.6,
+      "alpha": 100.0,
+      "candidate": "C1",
+      "long_halflife": 32,
+      "mean_inner_mae": 10.30005175136944,
+      "prior_season_weight": 0.4,
       "season": 2025,
-      "short_halflife": 8,
+      "short_halflife": 12,
       "target": "margin",
       "validation_games": 1599,
       "validation_seasons": [
@@ -703,11 +695,11 @@
       ]
     },
     {
-      "alpha": 1.0,
-      "candidate": "C0",
+      "alpha": 100.0,
+      "candidate": "C1",
       "long_halflife": 24,
-      "mean_inner_mae": 10.827648919753797,
-      "prior_season_weight": 0.6,
+      "mean_inner_mae": 10.806588367273479,
+      "prior_season_weight": 0.4,
       "season": 2025,
       "short_halflife": 8,
       "target": "total_points",
@@ -722,5 +714,5 @@
       ]
     }
   ],
-  "source_manifest_sha256": "f5aaeb42a879fb854cd13c12b8f7f9c1753daa96759fedfaa77ccff0c512b47b"
+  "source_manifest_sha256": "ad0487c7d7c0545b5d6f9ab8291ebce55d8c0b822e60347abc6a8288d651a6c4"
 }

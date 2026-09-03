@@ -69,6 +69,37 @@ def _candidate_number(candidate: str) -> int:
         raise ValueError(f"unsupported Ridge-v2 candidate {candidate!r}") from exc
 
 
+def _reference_seasons(
+    grouped: dict[TargetConfig, list[tuple[int, float, int]]],
+) -> frozenset[int]:
+    """The season set every candidate must be scored on, so none wins on an easier cut.
+
+    `_inner_evaluations` lets C0 skip a validation season it cannot fit while every other
+    candidate re-raises, so configs reach this function with DIFFERENT season sets. Averaging
+    each over its own seasons then compares an easy denominator against a hard one: in the
+    2026-08-25 run C0 was scored from 2019 while C1-C5 also carried 2017 and 2018, whose MAE
+    runs 17-25, and C0 won every fold on that alone.
+
+    C0 is the baseline -- it is the Ridge-v1 schema -- so it defines the ground a challenger has
+    to win on. Each config is scored on its own seasons intersected with the reference, and a
+    config left with too few seasons is ineligible rather than being scored on a set nobody else
+    faced. Where several C0 variants are present the intersection across them is used, so every
+    reference season is one that every C0 variant actually has.
+
+    With no C0 present at all, the intersection across every config is used instead.
+    """
+    if not grouped:
+        return frozenset()
+    per_config = {
+        config: frozenset(season for season, _, _ in rows) for config, rows in grouped.items()
+    }
+    baselines = [
+        seasons for config, seasons in per_config.items() if config.candidate == "C0"
+    ]
+    sets = baselines or list(per_config.values())
+    return frozenset.intersection(*sets)
+
+
 def select_target_config(
     evaluations: pd.DataFrame,
     *,
@@ -105,17 +136,20 @@ def select_target_config(
         seen.add(identity)
         grouped.setdefault(config, []).append((season, mae, n_games))
 
+    reference = _reference_seasons(grouped)
+
     eligible: list[TargetSelection] = []
     for config, rows in grouped.items():
-        seasons = tuple(sorted(season for season, _, _ in rows))
-        validation_games = sum(n_games for _, _, n_games in rows)
+        scored = [row for row in rows if row[0] in reference]
+        seasons = tuple(sorted(season for season, _, _ in scored))
+        validation_games = sum(n_games for _, _, n_games in scored)
         if len(seasons) < MIN_INNER_SEASONS or validation_games < MIN_INNER_GAMES:
             continue
         eligible.append(
             TargetSelection(
                 target=target,
                 config=config,
-                mean_inner_mae=float(np.mean([mae for _, mae, _ in rows])),
+                mean_inner_mae=float(np.mean([mae for _, mae, _ in scored])),
                 validation_seasons=seasons,
                 validation_games=validation_games,
             )
