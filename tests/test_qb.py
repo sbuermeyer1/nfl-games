@@ -168,7 +168,14 @@ def test_future_depth_snapshot_cannot_change_expected_starter():
 
 def test_empty_history_returns_documented_numeric_feature_schema():
     out = qb_features_for_targets(pd.DataFrame(), pd.DataFrame(), _schedules(), [(2024, 2)])
-    assert list(out.columns) == ["season", "week", "team", "expected_starter_id", *QB_FEATURE_COLS]
+    assert list(out.columns) == [
+        "season",
+        "week",
+        "team",
+        "expected_starter_id",
+        "recent_starter_id",
+        *QB_FEATURE_COLS,
+    ]
     assert set(out["team"]) == {"BUF", "MIA"}
 
 
@@ -302,3 +309,25 @@ def test_labelled_era_resolves_a_starter_at_both_cutoffs():
         # cutoffs -- but it must still RESOLVE rather than falling through to null.
         assert out.loc["BAL", "expected_starter_id"] == "LAMAR", cutoff
         assert out.loc["BAL", "qb_uncertain"] == 0, cutoff
+
+
+def test_recent_starter_id_is_reported():
+    stats, depth, schedules = _cutoff_fixture()
+    out = qb_features_for_targets(
+        qb_week_stats(stats), depth, schedules, [(2025, 5)], cutoff=None
+    ).set_index("team")
+    assert out.loc["BAL", "expected_starter_id"] == "HUNT"
+    assert out.loc["BAL", "recent_starter_id"] == "LAMAR"
+    assert out.loc["BAL", "qb_new_starter"] == 1
+    # An unchanged team names the same quarterback on both sides.
+    assert out.loc["CIN", "recent_starter_id"] == "BURROW"
+    assert out.loc["CIN", "qb_new_starter"] == 0
+
+
+def test_recent_starter_id_is_null_when_no_prior_game_exists():
+    stats, depth, schedules = _cutoff_fixture()
+    empty = qb_week_stats(stats.iloc[0:0])
+    out = qb_features_for_targets(
+        empty, depth, schedules, [(2025, 5)], cutoff=None
+    ).set_index("team")
+    assert pd.isna(out.loc["BAL", "recent_starter_id"])

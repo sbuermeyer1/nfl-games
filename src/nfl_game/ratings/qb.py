@@ -174,7 +174,14 @@ def qb_features_for_targets(
 ) -> pd.DataFrame:
     """Build as-of QB features for both teams in each requested scheduled game."""
     games = _targets_from_schedule(schedules, targets, cutoff)
-    columns = ["season", "week", "team", "expected_starter_id", *QB_FEATURE_COLS]
+    columns = [
+        "season",
+        "week",
+        "team",
+        "expected_starter_id",
+        "recent_starter_id",
+        *QB_FEATURE_COLS,
+    ]
     if games.empty:
         return pd.DataFrame(columns=columns)
     weeks = qb_weeks.copy() if not qb_weeks.empty else pd.DataFrame(columns=qb_week_stats(pd.DataFrame()).columns)
@@ -209,6 +216,7 @@ def qb_features_for_targets(
         results.append(
             {
                 "season": int(row.season), "week": int(row.week), "team": row.team, "expected_starter_id": expected,
+                "recent_starter_id": recent_starter,
                 "qb_epa_per_db": (player_rates["epa"] * player_db + league["epa"] * QB_PRIOR_DROPBACKS) / weight,
                 "qb_cpoe": (player_rates["cpoe"] * player_db + league["cpoe"] * QB_PRIOR_DROPBACKS) / weight,
                 "qb_sack_rate": (player_rates["sack"] * player_db + league["sack"] * QB_PRIOR_DROPBACKS) / weight,
