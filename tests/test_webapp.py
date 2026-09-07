@@ -213,13 +213,15 @@ class Element {
 }
 
 const nodes = Object.fromEntries(
-  ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'market-message', 'results']
+  ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'market-message',
+   'starter-message', 'results']
     .map(id => [id, new Element(id === 'edge' ? 'input' : 'select')])
 );
 nodes.run.tagName = 'button';
 nodes.download.tagName = 'button';
 nodes.message.tagName = 'p';
 nodes['market-message'].tagName = 'p';
+nodes['starter-message'].tagName = 'p';
 nodes.results.tagName = 'table';
 
 globalThis.document = {
@@ -288,6 +290,7 @@ eval(input.script);
     location: window.location,
     message: nodes.message.textContent,
     marketMessage: nodes['market-message'].textContent,
+    starterMessage: nodes['starter-message'].textContent,
     rows,
     season: { value: nodes.season.value, options: options('season') },
     week: { value: nodes.week.value, options: options('week') },
@@ -482,6 +485,42 @@ def test_dashboard_warns_when_market_data_is_stale():
 
     assert "stale" in state["marketMessage"].lower()
     assert "2026-09-01T12:00:00+00:00" in state["marketMessage"]
+
+
+def test_dashboard_warns_when_the_starter_advisory_is_stale():
+    """I3: a stale starter snapshot is not bounded by the provider's TTL the way a
+    stuck market refresh is bounded by a short one -- _stale_or_raise keeps returning
+    the cached snapshot for as long as refreshes keep failing. A depth chart's whole
+    value is timeliness, so payload().starters must actually be rendered, the way
+    renderMarket already renders payload().market."""
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+    responses[slate_url]["body"]["starters"] = {
+        "source": "nflverse",
+        "observed_at": "2026-09-01T09:00:00+00:00",
+        "stale": True,
+    }
+
+    state = dashboard_state(client(), responses, initialize_actions())
+
+    assert "stale" in state["starterMessage"].lower()
+    assert "2026-09-01T09:00:00+00:00" in state["starterMessage"]
+
+
+def test_dashboard_shows_no_starter_warning_when_the_advisory_is_fresh_or_absent():
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+
+    fresh = dashboard_state(client(), responses, initialize_actions())
+    assert fresh["starterMessage"] == ""
+
+    responses[slate_url]["body"]["starters"] = {
+        "source": "nflverse",
+        "observed_at": "2026-09-01T12:00:00+00:00",
+        "stale": False,
+    }
+    not_stale = dashboard_state(client(), responses, initialize_actions())
+    assert "stale" not in not_stale["starterMessage"].lower()
 
 
 def test_dashboard_loading_message_is_ascii_safe():

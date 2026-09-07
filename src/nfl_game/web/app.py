@@ -59,6 +59,7 @@ PAGE = """<!doctype html>
   </div>
   <p id="message" role="status"></p>
   <p id="market-message" role="status" aria-live="polite"></p>
+  <p id="starter-message" role="status" aria-live="polite"></p>
   <div class="table-wrap"><table id="results"></table></div>
   <p class="note">Spreads are home-team margins. An edge flag shows model/market
   disagreement and is not betting advice.</p>
@@ -72,6 +73,7 @@ const runButton = document.getElementById('run');
 const downloadButton = document.getElementById('download');
 const message = document.getElementById('message');
 const marketMessage = document.getElementById('market-message');
+const starterMessage = document.getElementById('starter-message');
 const results = document.getElementById('results');
 let latestWeekRequest = 0;
 let latestSlateRequest = 0;
@@ -149,6 +151,20 @@ function renderMarket(market) {
     : `Lines updated ${observedAt}`;
 }
 
+function renderStarters(starters) {
+  // Mirrors renderMarket: a stale starter snapshot is not bounded by a short TTL --
+  // the provider keeps returning it, marked stale, for as long as refreshes keep
+  // failing -- and a depth chart's whole value is timeliness.
+  if (!starters) {
+    starterMessage.textContent = '';
+    return;
+  }
+  const observedAt = starters.observed_at || '\u2014';
+  starterMessage.textContent = starters.stale
+    ? `Warning: starter advisory is stale. Last observed ${observedAt}`
+    : '';
+}
+
 function renderGames(games) {
   const columns = [
     ['Game', game => `${game.away_team} @ ${game.home_team}`],
@@ -192,6 +208,7 @@ function invalidateSlate(runAvailable = true) {
   results.replaceChildren();
   message.textContent = '';
   marketMessage.textContent = '';
+  starterMessage.textContent = '';
   downloadButton.disabled = true;
   runButton.disabled = !runAvailable;
 }
@@ -219,11 +236,13 @@ async function runSlate() {
   runButton.disabled = true;
   message.textContent = 'Loading...';
   marketMessage.textContent = '';
+  starterMessage.textContent = '';
   try {
     const body = await jsonOrError(`/api/slate?${query}`);
     if (request !== latestSlateRequest || query !== queryString()) return;
     renderGames(body.games);
     renderMarket(body.market);
+    renderStarters(body.starters);
     renderedSlateQuery = query;
     downloadButton.disabled = false;
     message.textContent = `${body.games.length} games`;
@@ -231,6 +250,7 @@ async function runSlate() {
     if (request !== latestSlateRequest || query !== queryString()) return;
     results.replaceChildren();
     marketMessage.textContent = '';
+    starterMessage.textContent = '';
     message.textContent = error.message;
   } finally {
     if (request === latestSlateRequest && query === queryString()) {
