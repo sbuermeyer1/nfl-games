@@ -9,6 +9,7 @@ import pandas as pd
 
 from nfl_game.data.schedule import normalize_schedule
 from nfl_game.market.live import NflverseMarketProvider
+from nfl_game.market.live_starters import NflverseStarterProvider
 from nfl_game.web.app import create_app
 from nfl_game.web.service import SlateService
 from nfl_game.web.tracker_service import TrackerService
@@ -78,6 +79,7 @@ def load_app(
         if packaged_schedule.empty:
             raise ValueError("schedule contains no 2026 regular-season games")
         market_provider = NflverseMarketProvider()
+        starter_provider = NflverseStarterProvider()
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged 2026 schedule {schedule}: {exc}") from exc
     try:
@@ -85,6 +87,7 @@ def load_app(
             dataset,
             packaged_schedule=packaged_schedule,
             market_provider=market_provider,
+            starter_provider=starter_provider,
         )
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged dataset {dataset}: {exc}") from exc
