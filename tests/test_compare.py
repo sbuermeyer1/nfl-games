@@ -251,3 +251,64 @@ def test_edge_flag_is_driven_by_spread_gap_not_total_gap():
     out = build_slate(*_inputs_edge_cases()).set_index("game_id")
     assert out.loc["g_total_only", "edge_flag"] == 0
     assert out.loc["g_total_only", "total_gap"] == 8.0
+
+
+def _advisory(game_id, watch=1):
+    return pd.DataFrame(
+        {
+            "game_id": pd.Series([game_id], dtype="string"),
+            "home_qb": pd.Series(["Tyler Huntley"], dtype="string"),
+            "away_qb": pd.Series(["Joe Burrow"], dtype="string"),
+            "qb_change_epa_home": [-0.31],
+            "qb_change_epa_away": [0.0],
+            "qb_watch": pd.Series([watch], dtype="Int64"),
+            "qb_inferred": pd.Series([0], dtype="Int64"),
+        }
+    )
+
+
+def test_slate_without_starters_has_null_advisory_columns():
+    out = build_slate(*_inputs())
+    assert list(out.columns) == SLATE_COLS
+    assert out["qb_watch"].isna().all()
+    assert out["home_qb"].isna().all()
+
+
+def test_the_overlay_never_moves_a_prediction_or_a_flag():
+    feats, preds, probs = _inputs()
+    without = build_slate(feats, preds, probs)
+    game_id = without["game_id"].iloc[0]
+    with_advisory = build_slate(feats, preds, probs, starters=_advisory(game_id))
+    for column in ("model_spread", "model_total", "spread_gap", "total_gap", "edge_flag"):
+        pd.testing.assert_series_equal(
+            without[column], with_advisory[column], check_exact=True
+        )
+
+
+def test_the_overlay_attaches_to_the_right_game():
+    feats, preds, probs = _inputs()
+    game_id = build_slate(feats, preds, probs)["game_id"].iloc[0]
+    out = build_slate(feats, preds, probs, starters=_advisory(game_id)).set_index("game_id")
+    assert out.loc[game_id, "home_qb"] == "Tyler Huntley"
+    assert out.loc[game_id, "qb_watch"] == 1
+
+
+def test_an_advisory_for_an_unknown_game_leaves_every_row_null():
+    feats, preds, probs = _inputs()
+    out = build_slate(feats, preds, probs, starters=_advisory("2099_01_XXX_YYY"))
+    assert out["qb_watch"].isna().all()
+
+
+def test_markdown_renders_the_qb_column_and_marks_a_watch():
+    feats, preds, probs = _inputs()
+    game_id = build_slate(feats, preds, probs)["game_id"].iloc[0]
+    md = slate_markdown(build_slate(feats, preds, probs, starters=_advisory(game_id)))
+    assert "| QB |" in md
+    assert "Tyler Huntley" in md
+    assert "-0.31" in md
+
+
+def test_markdown_renders_a_missing_advisory_as_not_available():
+    md = slate_markdown(build_slate(*_inputs()))
+    assert "| QB |" in md
+    assert "nan" not in md.lower()
