@@ -35,18 +35,19 @@ def _schedules():
 def _depth_history():
     """Both live shapes: the pre-2025 feed keys identity to `club_code` and rank to
     `depth_team`; the 2025-era feed keys them to `team` and `pos_rank` and carries no
-    season or week at all."""
+    season or week at all. Player identity is `gsis_id` in both blocks -- the live feed
+    never populates `player_id` in either era (Task 8, Step 1)."""
     week_labelled = pd.DataFrame(
         [
-            {"season": 2024, "week": 2, "club_code": "BUF", "position": "QB", "depth_team": "1", "player_id": "qb-a"},
-            {"season": 2024, "week": 2, "club_code": "BUF", "position": "QB", "depth_team": "2", "player_id": "qb-b"},
-            {"season": 2024, "week": 2, "club_code": "MIA", "position": "QB", "depth_team": "1", "player_id": "qb-c"},
+            {"season": 2024, "week": 2, "club_code": "BUF", "position": "QB", "depth_team": "1", "gsis_id": "qb-a"},
+            {"season": 2024, "week": 2, "club_code": "BUF", "position": "QB", "depth_team": "2", "gsis_id": "qb-b"},
+            {"season": 2024, "week": 2, "club_code": "MIA", "position": "QB", "depth_team": "1", "gsis_id": "qb-c"},
         ]
     )
     timestamped = pd.DataFrame(
         [
-            {"team": "BUF", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "qb-a", "dt": "2025-09-20T12:00:00Z"},
-            {"team": "MIA", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
+            {"team": "BUF", "pos_abb": "QB", "pos_rank": 1.0, "gsis_id": "qb-a", "dt": "2025-09-20T12:00:00Z"},
+            {"team": "MIA", "pos_abb": "QB", "pos_rank": 1.0, "gsis_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
         ]
     )
     return pd.concat([week_labelled, timestamped], ignore_index=True)

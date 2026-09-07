@@ -7,7 +7,7 @@ live call this task requires and recorded the real feed's columns in the plan fi
 fixtures were corrected against that observation before this test was written.
 """
 
-from tests.test_qb import _cutoff_fixture, _pre2025_era_fixture
+from tests.test_qb import _cutoff_fixture, _depth_history, _pre2025_era_fixture
 
 from nfl_game.ratings.depth import (
     _PLAYER_SOURCES,
@@ -27,15 +27,27 @@ def _labelled_fixture_columns() -> set[str]:
     return set(depth.columns)
 
 
+def _depth_history_columns() -> set[str]:
+    return set(_depth_history().columns)
+
+
 def test_each_fixture_column_is_one_depth_py_actually_reads():
     """A fixture column that depth.py never coalesces is decoration, not a fixture.
 
     The sets come from the fixture builders themselves, so renaming a column in
-    tests/test_qb.py without updating depth.py fails HERE.
+    tests/test_qb.py without updating depth.py fails HERE. `_depth_history()` is
+    included alongside the two era fixtures -- it predates this task, is not
+    exclusive to either era (it deliberately concatenates both live shapes into one
+    frame), and was never checked against the live feed until now.
     """
     known = set(_TEAM_SOURCES) | set(_POSITION_SOURCES) | set(_PLAYER_SOURCES)
     known |= set(_RANK_SOURCES) | {"dt", "season", "week"}
-    for columns in (_timestamped_fixture_columns(), _labelled_fixture_columns()):
+    fixtures = (
+        _timestamped_fixture_columns(),
+        _labelled_fixture_columns(),
+        _depth_history_columns(),
+    )
+    for columns in fixtures:
         assert columns <= known, sorted(columns - known)
 
 
@@ -102,3 +114,20 @@ def test_each_era_uses_the_player_identity_spelling_the_live_feed_actually_carri
     labelled, _ = _pre2025_era_fixture()
     assert "gsis_id" in timestamped.columns and "player_id" not in timestamped.columns
     assert "gsis_id" in labelled.columns and "player_id" not in labelled.columns
+
+
+def test_depth_history_uses_the_player_identity_spelling_the_live_feed_actually_carries():
+    """A third, independent instance of the same defect class, in a fixture that
+    predates this task and is not built by `_cutoff_fixture()`/`_pre2025_era_fixture()`.
+
+    `_depth_history()` deliberately concatenates both live shapes into one frame (its
+    own docstring says so), and gets the TEAM spelling right for each block -- `club_code`
+    for the week-labelled rows, `team` for the timestamped rows -- which is why it was
+    usable as corroborating evidence for the other two fixtures' team-column fix. But it
+    used `player_id` in both blocks, which neither live era populates. This is invisible
+    to every one of the six pre-existing tests that consume it, for the same coalescing
+    reason as the other two instances, and is caught only by pinning the live-observed
+    spelling as a literal, exactly like the two tests above.
+    """
+    columns = _depth_history_columns()
+    assert "gsis_id" in columns and "player_id" not in columns
