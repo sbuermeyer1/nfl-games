@@ -113,15 +113,28 @@ def _fmt(value: float, spec: str) -> str:
 
 
 def _qb_cell(row) -> str:
-    """Render the advisory for one game, or "n/a" when it could not be built.
+    """Render the advisory for one game, in one of four distinct ways.
 
-    A blank cell would be indistinguishable from "no change"; the advisory being
-    unavailable is a different fact and reads as one.
+    `qb_watch` null: the advisory could not be built at all -- "n/a". A blank cell
+    would be indistinguishable from a confirmed "no change".
+
+    `qb_watch == 0` and `qb_inferred == 1`: no depth chart has published yet for one
+    or both sides, so the starter shown is inferred from last week rather than read
+    from a chart -- "unconfirmed". This must NOT render the same as a genuine
+    no-change (blank), which is what let an unpublished chart pass as "no starter
+    changes" before a reader ever saw a real one.
+
+    `qb_watch == 0` and `qb_inferred == 0`: both charts published and there is
+    genuinely no change -- blank.
+
+    `qb_watch == 1`: a change was detected -- the existing description, with its
+    "(inferred)" suffix when the change itself rests on an inferred side.
     """
     if pd.isna(row.qb_watch):
         return "n/a"
-    if row.qb_watch != 1:
-        return ""
+    inferred = not pd.isna(row.qb_inferred) and row.qb_inferred == 1
+    if row.qb_watch == 0:
+        return "unconfirmed" if inferred else ""
     parts = []
     for name, delta in (
         (row.home_qb, row.qb_change_epa_home),
@@ -131,7 +144,7 @@ def _qb_cell(row) -> str:
             continue
         label = "unknown" if pd.isna(name) else name
         parts.append(f"{label} {delta:+.2f}")
-    suffix = " (inferred)" if not pd.isna(row.qb_inferred) and row.qb_inferred == 1 else ""
+    suffix = " (inferred)" if inferred else ""
     return ("; ".join(parts) or "change") + suffix
 
 

@@ -410,6 +410,15 @@ def test_dashboard_renders_qb_advisory_cell_and_row_class():
             "qb_inferred": None,
         },
         {
+            **dashboard_game("KKK", "LLL"),
+            "qb_watch": 0,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": None,
+            "qb_change_epa_away": None,
+            "qb_inferred": 1,
+        },
+        {
             **dashboard_game("EEE", "FFF"),
             "qb_watch": None,
             "home_qb": None,
@@ -446,12 +455,17 @@ def test_dashboard_renders_qb_advisory_cell_and_row_class():
     assert rows[0]["className"] == "qb-watch"
     assert rows[1]["cells"][-1] == ""
     assert rows[1]["className"] == ""
-    assert rows[2]["cells"][-1] == "n/a"
+    # I1: no chart has published yet (qb_watch=0, qb_inferred=1) must read differently
+    # from a genuine no-change (qb_watch=0, qb_inferred=0, asserted on rows[1] above) --
+    # both used to render as the same blank cell.
+    assert rows[2]["cells"][-1] == "unconfirmed"
     assert rows[2]["className"] == ""
-    assert rows[3]["cells"][-1] == "change (inferred)"
-    assert rows[3]["className"] == "qb-watch"
-    assert rows[4]["cells"][-1] == "New Starter +1.50"
-    assert rows[4]["className"] == "edge qb-watch"
+    assert rows[3]["cells"][-1] == "n/a"
+    assert rows[3]["className"] == ""
+    assert rows[4]["cells"][-1] == "change (inferred)"
+    assert rows[4]["className"] == "qb-watch"
+    assert rows[5]["cells"][-1] == "New Starter +1.50"
+    assert rows[5]["className"] == "edge qb-watch"
 
 
 def test_dashboard_warns_when_market_data_is_stale():

@@ -122,15 +122,20 @@ function formatted(value, kind) {
 }
 
 function qbCell(game) {
+  // Mirrors market/compare.py::_qb_cell exactly -- a reader comparing the CLI and
+  // the dashboard for the same game must see the same thing. In particular,
+  // qb_watch === 0 with qb_inferred === 1 (no chart published yet) must render
+  // "unconfirmed", not the same blank cell as a genuine, chart-confirmed no-change.
   if (game.qb_watch === null || game.qb_watch === undefined) return 'n/a';
-  if (game.qb_watch !== 1) return '';
+  const inferred = game.qb_inferred === 1;
+  if (game.qb_watch === 0) return inferred ? 'unconfirmed' : '';
   const parts = [];
   for (const [name, delta] of [[game.home_qb, game.qb_change_epa_home],
                                [game.away_qb, game.qb_change_epa_away]]) {
     if (delta === null || delta === undefined || delta === 0) continue;
     parts.push(`${name === null ? 'unknown' : name} ${delta > 0 ? '+' : ''}${delta.toFixed(2)}`);
   }
-  return (parts.join('; ') || 'change') + (game.qb_inferred === 1 ? ' (inferred)' : '');
+  return (parts.join('; ') || 'change') + (inferred ? ' (inferred)' : '');
 }
 
 function renderMarket(market) {

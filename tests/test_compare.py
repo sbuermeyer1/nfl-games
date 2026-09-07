@@ -253,7 +253,7 @@ def test_edge_flag_is_driven_by_spread_gap_not_total_gap():
     assert out.loc["g_total_only", "total_gap"] == 8.0
 
 
-def _advisory(game_id, watch=1):
+def _advisory(game_id, watch=1, inferred=0):
     return pd.DataFrame(
         {
             "game_id": pd.Series([game_id], dtype="string"),
@@ -262,7 +262,7 @@ def _advisory(game_id, watch=1):
             "qb_change_epa_home": [-0.31],
             "qb_change_epa_away": [0.0],
             "qb_watch": pd.Series([watch], dtype="Int64"),
-            "qb_inferred": pd.Series([0], dtype="Int64"),
+            "qb_inferred": pd.Series([inferred], dtype="Int64"),
         }
     )
 
@@ -330,8 +330,8 @@ def test_game_id_dtype_is_identical_with_and_without_starters():
 
 
 def test_qb_cell_handles_null_qb_inferred_with_qb_watch_one():
-    # qb_inferred and qb_watch are always derived from the same `known` mask in
-    # ratings/starters.py today, so they can't disagree in production -- but _qb_cell
+    # qb_inferred and qb_watch are always derived from the per-team advisory computation
+    # in ratings/starters.py today, so they can't disagree in production -- but _qb_cell
     # takes an arbitrary row with no such guarantee. If qb_watch == 1 while qb_inferred
     # is null, `row.qb_inferred == 1` evaluates to `pd.NA`, and `"..." if pd.NA else
     # "..."` raises TypeError: boolean value of NA is ambiguous. _qb_cell must treat a
@@ -347,3 +347,52 @@ def test_qb_cell_handles_null_qb_inferred_with_qb_watch_one():
         }
     )
     assert _qb_cell(row) == "Tyler Huntley -0.31"
+
+
+def test_qb_cell_renders_unconfirmed_when_no_chart_has_published_yet():
+    # I1: an unpublished depth chart (qb_watch=0, qb_inferred=1 -- the starter shown is
+    # last week's, not read from a chart) must not render identically to a genuine
+    # no-change (qb_watch=0, qb_inferred=0). Both currently return "" from _qb_cell's
+    # early `if row.qb_watch != 1: return ""`, which is indistinguishable from "no
+    # change" to a reader scanning the slate before charts publish.
+    row = pd.Series(
+        {
+            "home_qb": pd.NA,
+            "away_qb": "Lamar Jackson",
+            "qb_change_epa_home": float("nan"),
+            "qb_change_epa_away": 0.0,
+            "qb_watch": pd.array([0], dtype="Int64")[0],
+            "qb_inferred": pd.array([1], dtype="Int64")[0],
+        }
+    )
+    assert _qb_cell(row) == "unconfirmed"
+
+
+def test_qb_cell_is_blank_when_charts_published_and_genuinely_unchanged():
+    row = pd.Series(
+        {
+            "home_qb": "Lamar Jackson",
+            "away_qb": "Joe Burrow",
+            "qb_change_epa_home": 0.0,
+            "qb_change_epa_away": 0.0,
+            "qb_watch": pd.array([0], dtype="Int64")[0],
+            "qb_inferred": pd.array([0], dtype="Int64")[0],
+        }
+    )
+    assert _qb_cell(row) == ""
+
+
+def test_markdown_marks_an_unpublished_chart_as_unconfirmed_not_blank():
+    # The reviewer's scenario A/B: no chart published at all (or only one side's did),
+    # so qb_watch=0 and qb_inferred=1. This must read differently from a genuine
+    # no-change row (case C, qb_watch=0 and qb_inferred=0) in both the CLI table and,
+    # by the same _qb_cell/qbCell contract, the dashboard.
+    feats, preds, probs = _inputs()
+    game_id = build_slate(feats, preds, probs)["game_id"].iloc[0]
+    out = build_slate(feats, preds, probs, starters=_advisory(game_id, watch=0, inferred=1))
+    md = slate_markdown(out)
+    assert "unconfirmed" in md
+    genuinely_unchanged = build_slate(
+        feats, preds, probs, starters=_advisory(game_id, watch=0, inferred=0)
+    )
+    assert "unconfirmed" not in slate_markdown(genuinely_unchanged)
