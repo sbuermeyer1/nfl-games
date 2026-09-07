@@ -1143,14 +1143,24 @@ def build_slate(
 ```python
     # Joined after edge_flag on purpose: every column above this line is computed from
     # the model and the market alone, so no advisory failure mode can reach them.
+    # `game_id`'s dtype must NOT depend on whether `starters` was supplied. Casting it
+    # only inside the branch below makes build_slate return `str` without an advisory and
+    # pandas `StringDtype` with one -- an unintended contract change to a pre-existing
+    # column that no test covers, and one that goes live the moment Task 7 wires
+    # `starters` through `web/service.py`. Cast unconditionally, and pin it with a test
+    # asserting the dtype is identical across both branches.
+    df["game_id"] = df["game_id"].astype("string")
     if starters is not None and not starters.empty:
         advisory = starters.drop_duplicates("game_id").copy()
         advisory["game_id"] = advisory["game_id"].astype("string")
-        df["game_id"] = df["game_id"].astype("string")
         df = df.merge(advisory, on="game_id", how="left", validate="one_to_one")
     for name, dtype in _ADVISORY_DTYPES.items():
         if name not in df:
-            df[name] = pd.Series(pd.NA, index=df.index, dtype=dtype)
+            # `pd.NA` is NOT a valid fill for a numpy dtype -- pd.Series(pd.NA, ...,
+            # dtype="float64") raises TypeError. Pick the sentinel per dtype: pd.NA for
+            # the pandas extension dtypes (`string`, `Int64`), float("nan") for float64.
+            null = pd.NA if dtype in {"string", "Int64"} else float("nan")
+            df[name] = pd.Series(null, index=df.index, dtype=dtype)
         else:
             df[name] = df[name].astype(dtype)
 ```
@@ -1187,7 +1197,11 @@ def _qb_cell(row) -> str:
             continue
         label = "unknown" if pd.isna(name) else name
         parts.append(f"{label} {delta:+.2f}")
-    suffix = " (inferred)" if row.qb_inferred == 1 else ""
+    # Guard the null: `pd.NA == 1` is `pd.NA`, and `if pd.NA` raises TypeError. The two
+    # flags come from one `known` mask in starters.py so they are never out of sync
+    # today, but this helper takes an arbitrary row and Task 7 renders the same values
+    # through JSON into JavaScript, where that invariant is easier to break.
+    suffix = " (inferred)" if not pd.isna(row.qb_inferred) and row.qb_inferred == 1 else ""
     return ("; ".join(parts) or "change") + suffix
 ```
 
