@@ -396,10 +396,21 @@ Turn per-team starter rows into one row per game, with display names and the two
 | --- | --- | --- |
 | `home_qb`, `away_qb` | `string` | expected starter display name, or `<NA>` if unresolved |
 | `qb_change_epa_home/away` | `float64` | expected starter EPA/dropback minus prior starter's; `0.0` when unchanged |
-| `qb_watch` | `Int64` | 1 if either side has a new starter, 0 if neither; `<NA>` if the advisory could not be built |
+| `qb_watch` | `Int64` | 1 if either side has a new starter, 0 if neither |
 | `qb_inferred` | `Int64` | 1 if either side's starter was inferred from last week rather than read from a chart |
 
-`qb_watch` is **nullable and never defaulted to 0**. A null means "we do not know"; a zero asserts "no change", which is a different and false claim.
+`qb_watch` is `Int64` so it *can* carry `<NA>`, but never does from this function for a
+scheduled game: `per_team` is built by `qb_features_for_targets` from the same
+schedules/targets `games` comes from here, so every team in `games` always has a
+matching per-team row, and `qb_new_starter`/`qb_uncertain` are always plain 0/1 ints,
+never NaN — even when neither side's starter resolves. A `known`-style mask on that
+non-existent case was tried and later removed as dead code (post-launch review, Fix 2);
+correcting this doc is part of that fix. `qb_watch`/`qb_inferred` DO end up null
+downstream, in `market/compare.py::build_slate`, when no `starters` frame is supplied at
+all or a game_id has no matching advisory row — that is where "we do not know" actually
+comes from, not from a per-side mask here. A rendered "no change" (blank cell) still
+requires BOTH `qb_watch == 0` and `qb_inferred == 0`; `qb_watch == 0` with
+`qb_inferred == 1` (no chart published yet) renders "unconfirmed" instead — see Fix 1.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -642,13 +653,10 @@ def starter_advisory(
             merged["qb_uncertain"], errors="coerce"
         ).to_numpy()
 
-    # A side whose starter never resolved leaves the game unknown rather than "no change".
-    known = out[["_new_home", "_new_away"]].notna().all(axis=1)
-    watch = out[["_new_home", "_new_away"]].max(axis=1)
-    out["qb_watch"] = watch.where(known).astype("Int64")
-    out["qb_inferred"] = (
-        out[["_unc_home", "_unc_away"]].max(axis=1).where(known).astype("Int64")
-    )
+    # qb_watch/qb_inferred are never null from this function -- see "Column semantics"
+    # above (Fix 2, post-launch review) for why a per-side `known` mask was dead code.
+    out["qb_watch"] = out[["_new_home", "_new_away"]].max(axis=1).astype("Int64")
+    out["qb_inferred"] = out[["_unc_home", "_unc_away"]].max(axis=1).astype("Int64")
     return out[ADVISORY_COLS].reset_index(drop=True)
 ```
 

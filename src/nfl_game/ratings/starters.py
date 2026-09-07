@@ -102,11 +102,14 @@ def starter_advisory(
             merged["qb_uncertain"], errors="coerce"
         ).to_numpy()
 
-    # A side whose starter never resolved leaves the game unknown rather than "no change".
-    known = out[["_new_home", "_new_away"]].notna().all(axis=1)
-    watch = out[["_new_home", "_new_away"]].max(axis=1)
-    out["qb_watch"] = watch.where(known).astype("Int64")
-    out["qb_inferred"] = (
-        out[["_unc_home", "_unc_away"]].max(axis=1).where(known).astype("Int64")
-    )
+    # qb_watch/qb_inferred are never null from this function: `per_team` is built by
+    # qb_features_for_targets from the SAME schedules/targets `games` comes from, so
+    # every team in `games` always has a matching per-team row, and qb_new_starter /
+    # qb_uncertain are always plain 0/1 ints (never NaN) even when neither side's
+    # starter resolves. A null qb_watch/qb_inferred can still happen downstream, in
+    # build_slate, when no `starters` frame is supplied at all or a game_id has no
+    # matching advisory row -- that is a different, real "unavailable" case, not this
+    # per-side one.
+    out["qb_watch"] = out[["_new_home", "_new_away"]].max(axis=1).astype("Int64")
+    out["qb_inferred"] = out[["_unc_home", "_unc_away"]].max(axis=1).astype("Int64")
     return out[ADVISORY_COLS].reset_index(drop=True)

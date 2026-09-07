@@ -110,6 +110,31 @@ def test_unknown_player_id_yields_a_null_name_not_the_raw_id():
     assert pd.isna(out["home_qb"])
 
 
+def test_qb_watch_and_qb_inferred_are_never_null_for_a_scheduled_game():
+    # I2/Fix 2: qb_watch/qb_inferred used to be masked null via a `known` check on
+    # whether both sides' per-team rows resolved. That mask can never be False for
+    # any input the builder produces -- `per_team` is built from the same
+    # schedules/targets as `games`, so every scheduled team always has a per-team
+    # row, and qb_new_starter/qb_uncertain are always int, never NaN, even in the
+    # most degenerate case (no depth chart AND no prior stats at all, so neither
+    # side's starter resolves). This pins that degenerate case to still produce
+    # concrete 0/1 values, not <NA> -- a null qb_watch/qb_inferred from this
+    # function would mean the unreachable mask (or an equivalent) crept back in.
+    _, depth, schedules = _fixture()
+    out = starter_advisory(
+        pd.DataFrame(columns=["season", "week", "team", "player_id", "dropbacks", "passing_epa", "passing_cpoe", "sacks_suffered", "passing_interceptions"]),
+        depth.iloc[0:0],
+        schedules,
+        _players(),
+        [(2025, 5)],
+        cutoff=None,
+    ).iloc[0]
+    assert not pd.isna(out["qb_watch"])
+    assert not pd.isna(out["qb_inferred"])
+    assert out["qb_watch"] == 0
+    assert out["qb_inferred"] == 1
+
+
 def test_empty_targets_yield_an_empty_frame_with_the_full_schema():
     weeks, depth, schedules = _fixture()
     out = starter_advisory(weeks, depth, schedules, _players(), [], cutoff=None)

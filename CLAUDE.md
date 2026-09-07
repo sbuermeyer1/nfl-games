@@ -276,9 +276,15 @@ Do not introduce reverse dependencies. Package ownership is strict:
   advisory failure can move `model_margin`, `model_total` or `edge_flag` —
   `tests/test_compare.py::test_the_overlay_never_moves_a_prediction_or_a_flag` pins
   that directly. `qb_watch` is a separate marker from `edge_flag`, which is unchanged:
-  `qb_watch` null means "unknown" (feed unreachable) and 0 means "no change" — different
-  facts, rendered differently by the dashboard — while suppressing `edge_flag` on a
-  starter change would make one flag mean two things. Its `qb_change_epa` is NOT the
+  `qb_watch` null means the advisory could not be built at all (feed unreachable, or no
+  `starters` frame supplied) and renders "n/a"; `qb_watch == 0` renders "unconfirmed"
+  when `qb_inferred == 1` (no depth chart has published yet for one or both sides — the
+  starter shown is inferred from last week, not read from a chart) and blank only when
+  both charts have published with genuinely no change; `qb_watch == 1` renders the
+  change description. `qb_watch`/`qb_inferred` are never null from `ratings/starters.py`
+  itself for a scheduled game — every team in a target week always has a matching
+  per-team row, so the four states above are the complete set — while suppressing
+  `edge_flag` on a starter change would make one flag mean two things. Its `qb_change_epa` is NOT the
   Ridge-v2 C2 research figure: the provider's TTL is 30 minutes (the market module's is
   5) and it loads player stats for `[season - 1, season]` only, while C2 trains on the
   full corpus — advisory numbers must never be quoted as research numbers.

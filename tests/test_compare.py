@@ -330,8 +330,9 @@ def test_game_id_dtype_is_identical_with_and_without_starters():
 
 
 def test_qb_cell_handles_null_qb_inferred_with_qb_watch_one():
-    # qb_inferred and qb_watch are always derived from the per-team advisory computation
-    # in ratings/starters.py today, so they can't disagree in production -- but _qb_cell
+    # qb_inferred and qb_watch are both plain max()-of-two-sides derived from the same
+    # per-team advisory rows in ratings/starters.py today, so they can't disagree in
+    # production -- but _qb_cell
     # takes an arbitrary row with no such guarantee. If qb_watch == 1 while qb_inferred
     # is null, `row.qb_inferred == 1` evaluates to `pd.NA`, and `"..." if pd.NA else
     # "..."` raises TypeError: boolean value of NA is ambiguous. _qb_cell must treat a
