@@ -12,7 +12,7 @@ from nfl_game.model.predict import DEFAULT_ALPHA, DegenerateFeatureError, GameMo
 from nfl_game.paths import PROCESSED_DIR
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--season", type=int, required=True)
     ap.add_argument("--week", type=int, required=True)
@@ -29,7 +29,11 @@ def main() -> None:
         action="store_true",
         help="skip the expected-starter advisory (it needs a live depth-chart fetch)",
     )
-    args = ap.parse_args()
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parser().parse_args(argv)
 
     feats = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
 
