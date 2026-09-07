@@ -123,34 +123,52 @@ def test_2025_depth_history_uses_timestamp_as_of_target_kickoff():
     assert out.set_index("team").loc["BUF", "expected_starter_id"] == "qb-b"
 
 
-def test_normalized_depth_history_keeps_rank_one_starter_when_composed_publicly():
-    weeks = qb_week_stats(_player_stats())
-    depth = pd.DataFrame(
+def _composed_public_depth_fixture() -> pd.DataFrame:
+    """A depth-chart frame already composed in the PUBLIC/canonical schema (`player_id`,
+    not a raw-feed spelling) -- as a caller assembling already-normalized rows would do,
+    rather than the raw feed export `_cutoff_fixture`/`_pre2025_era_fixture` model.
+    Named (rather than inline) so test_depth_fixture_schema.py's drift check can scan
+    it too; a caller pointed at the wrong raw spelling here would silently pass every
+    functional test the same way the two era fixtures did before that drift check
+    existed.
+    """
+    return pd.DataFrame(
         [
             {"team": "BUF", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "z-starter", "dt": "2025-09-20T12:00:00Z"},
             {"team": "BUF", "pos_abb": "QB", "pos_rank": 2.0, "player_id": "a-backup", "dt": "2025-09-20T12:00:00Z"},
             {"team": "MIA", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
         ]
     )
-    history = normalize_depth_chart_history(depth, _schedules())
+
+
+def test_normalized_depth_history_keeps_rank_one_starter_when_composed_publicly():
+    weeks = qb_week_stats(_player_stats())
+    history = normalize_depth_chart_history(_composed_public_depth_fixture(), _schedules())
     out = qb_features_for_targets(weeks, history, _schedules(), [(2025, 4)])
     assert out.set_index("team").loc["BUF", "expected_starter_id"] == "z-starter"
 
 
-def test_mixed_normalized_and_raw_depth_history_coalesces_per_row_ranks():
-    weeks = qb_week_stats(_player_stats())
-    normalized = normalize_depth_chart_history(
-        pd.DataFrame(
-            [{"team": "BUF", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "z-starter", "dt": "2025-09-20T12:00:00Z"}]
-        ),
-        _schedules(),
+def _mixed_depth_normalized_source() -> pd.DataFrame:
+    """The already-normalized half of the mixed fixture below."""
+    return pd.DataFrame(
+        [{"team": "BUF", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "z-starter", "dt": "2025-09-20T12:00:00Z"}]
     )
-    raw = pd.DataFrame(
+
+
+def _mixed_depth_raw_rows() -> pd.DataFrame:
+    """The raw-feed half of the mixed fixture below."""
+    return pd.DataFrame(
         [
             {"team": "BUF", "pos_abb": "QB", "pos_rank": 2.0, "player_id": "a-backup", "dt": "2025-09-20T12:00:00Z"},
             {"team": "MIA", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
         ]
     )
+
+
+def test_mixed_normalized_and_raw_depth_history_coalesces_per_row_ranks():
+    weeks = qb_week_stats(_player_stats())
+    normalized = normalize_depth_chart_history(_mixed_depth_normalized_source(), _schedules())
+    raw = _mixed_depth_raw_rows()
     history = normalize_depth_chart_history(pd.concat([normalized, raw], ignore_index=True), _schedules())
     a_rows = history[history["team"].eq("BUF")].sort_values("rank")
     assert a_rows[["player_id", "rank"]].values.tolist() == [["z-starter", 1], ["a-backup", 2]]
@@ -159,10 +177,33 @@ def test_mixed_normalized_and_raw_depth_history_coalesces_per_row_ranks():
     assert out.set_index("team").loc["BUF", "expected_starter_id"] == "z-starter"
 
 
+def _future_starter_row() -> pd.DataFrame:
+    """A depth-chart snapshot dated AFTER the target week's kickoff -- must never be
+    visible to a cutoff resolved at or before kickoff. Uses `pos_rank` (a real
+    `_RANK_SOURCES` spelling), not the earlier `depth_chart_position`, which
+    `normalize_depth_charts` drops for a null rank before `chart_as_of` ever runs --
+    the row vanished instead of being excluded by the cutoff, so the test it fed
+    couldn't fail for the reason it claimed to (Fix 4, post-launch review).
+    """
+    return pd.DataFrame(
+        [
+            {
+                "season": 2025,
+                "week": 4,
+                "team": "BUF",
+                "position": "QB",
+                "pos_rank": 1,
+                "player_id": "qb-z",
+                "dt": "2025-10-01T12:00:00Z",
+            }
+        ]
+    )
+
+
 def test_future_depth_snapshot_cannot_change_expected_starter():
     weeks = qb_week_stats(_player_stats())
     before = qb_features_for_targets(weeks, _depth_history(), _schedules(), [(2025, 4)])
-    future = pd.concat([_depth_history(), pd.DataFrame([{"season": 2025, "week": 4, "team": "BUF", "position": "QB", "depth_chart_position": 1, "player_id": "qb-z", "dt": "2025-10-01T12:00:00Z"}])], ignore_index=True)
+    future = pd.concat([_depth_history(), _future_starter_row()], ignore_index=True)
     after = qb_features_for_targets(weeks, future, _schedules(), [(2025, 4)])
     pd.testing.assert_frame_equal(before, after)
 

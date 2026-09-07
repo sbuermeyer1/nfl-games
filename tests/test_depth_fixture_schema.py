@@ -7,7 +7,15 @@ live call this task requires and recorded the real feed's columns in the plan fi
 fixtures were corrected against that observation before this test was written.
 """
 
-from tests.test_qb import _cutoff_fixture, _depth_history, _pre2025_era_fixture
+from tests.test_qb import (
+    _composed_public_depth_fixture,
+    _cutoff_fixture,
+    _depth_history,
+    _future_starter_row,
+    _mixed_depth_normalized_source,
+    _mixed_depth_raw_rows,
+    _pre2025_era_fixture,
+)
 
 from nfl_game.ratings.depth import (
     _PLAYER_SOURCES,
@@ -31,6 +39,18 @@ def _depth_history_columns() -> set[str]:
     return set(_depth_history().columns)
 
 
+def _composed_public_fixture_columns() -> set[str]:
+    return set(_composed_public_depth_fixture().columns)
+
+
+def _mixed_depth_fixture_columns() -> set[str]:
+    return set(_mixed_depth_normalized_source().columns) | set(_mixed_depth_raw_rows().columns)
+
+
+def _future_starter_row_columns() -> set[str]:
+    return set(_future_starter_row().columns)
+
+
 def test_each_fixture_column_is_one_depth_py_actually_reads():
     """A fixture column that depth.py never coalesces is decoration, not a fixture.
 
@@ -38,7 +58,10 @@ def test_each_fixture_column_is_one_depth_py_actually_reads():
     tests/test_qb.py without updating depth.py fails HERE. `_depth_history()` is
     included alongside the two era fixtures -- it predates this task, is not
     exclusive to either era (it deliberately concatenates both live shapes into one
-    frame), and was never checked against the live feed until now.
+    frame), and was never checked against the live feed until now. The three
+    composed/public-schema fixtures below (Fix 4, post-launch review) were inline
+    literals in tests/test_qb.py, unguarded by this drift check, until they were
+    named and added here.
     """
     known = set(_TEAM_SOURCES) | set(_POSITION_SOURCES) | set(_PLAYER_SOURCES)
     known |= set(_RANK_SOURCES) | {"dt", "season", "week"}
@@ -46,6 +69,9 @@ def test_each_fixture_column_is_one_depth_py_actually_reads():
         _timestamped_fixture_columns(),
         _labelled_fixture_columns(),
         _depth_history_columns(),
+        _composed_public_fixture_columns(),
+        _mixed_depth_fixture_columns(),
+        _future_starter_row_columns(),
     )
     for columns in fixtures:
         assert columns <= known, sorted(columns - known)
