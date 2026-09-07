@@ -370,9 +370,12 @@ class SlateService:
         target = self._target(season, week)
         snapshot = self._market_snapshot(season)
         target = self._overlay_market(target, snapshot)
+        bundle = self._bundle(season, estimator)
+        # Fetched after the bundle is fit and predictions/probabilities are ready, not
+        # before, mirroring scripts/slate.py -- a presentation-only advisory must not
+        # add latency ahead of the model's own work.
         starter_snapshot = self._starter_snapshot(season, week)
         starters = None if starter_snapshot is None else starter_snapshot.rows
-        bundle = self._bundle(season, estimator)
         preds = bundle.model.predict(target)
         probs_input = target.merge(preds, on="game_id", validate="one_to_one")
         probs = bundle.calibrator.predict(probs_input)

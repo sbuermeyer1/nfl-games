@@ -17,6 +17,12 @@ sample. This makes `qb_change_epa` here NOT numerically identical to the Ridge-v
 research block's, which trains on the full history -- that divergence is an accepted
 trade-off for keeping a live request cheap, and advisory numbers must never be quoted
 as research numbers.
+
+Those four season-scoped feeds (depth, stats, players, schedules) are cached ONCE PER
+SEASON, separately from the per-(season, week) snapshot cache above -- see
+`_SeasonFrames`/`_season_frames`. Only the advisory's `targets` argument differs per
+week, so without this, stepping through a season's weeks paid a full four-feed reload
+on every week, serialized behind this provider's single-worker executor.
 """
 
 from __future__ import annotations
@@ -50,6 +56,23 @@ class StarterSnapshot:
     stale: bool = False
 
 
+@dataclass(frozen=True)
+class _SeasonFrames:
+    """The four season-scoped feeds a snapshot is built from, cached once per season.
+
+    Every one of depth/stats/players/schedules is loaded for `[season - 1, season]`
+    (or unconditionally for players) -- only the advisory's `targets` argument differs
+    per week. Without this, stepping through a season's weeks paid a full four-feed
+    reload on every week, serialized behind the provider's single-worker executor.
+    """
+
+    depth: pd.DataFrame
+    stats: pd.DataFrame
+    players: pd.DataFrame
+    schedules: pd.DataFrame
+    loaded_at: datetime
+
+
 class NflverseStarterProvider:
     def __init__(
         self,
@@ -59,7 +82,7 @@ class NflverseStarterProvider:
         schedule_loader=load_schedules,
         clock=lambda: datetime.now(UTC),
         ttl=timedelta(minutes=30),
-        timeout_seconds=20.0,
+        timeout_seconds=5.0,
     ):
         self._depth_loader = depth_loader
         self._stats_loader = stats_loader
@@ -73,6 +96,10 @@ class NflverseStarterProvider:
         self._snapshots = {}
         self._futures = {}
         self._latest_futures = {}
+        # Season-scoped input cache, keyed by season alone -- see _SeasonFrames.
+        # Touched only from the single executor worker thread (max_workers=1), so
+        # concurrent _load_snapshot calls never race on it.
+        self._season_cache: dict[int, _SeasonFrames] = {}
 
     def snapshot(self, season: int, week: int) -> StarterSnapshot:
         key = (int(season), int(week))
@@ -83,7 +110,7 @@ class NflverseStarterProvider:
                 return cached
             future = self._futures.get(key)
             if future is None:
-                future = self._executor.submit(self._load_snapshot, key)
+                future = self._executor.submit(self._load_snapshot, key, now)
                 self._futures[key] = future
                 self._latest_futures[key] = future
         try:
@@ -94,15 +121,34 @@ class NflverseStarterProvider:
             return self._stale_or_raise(key, future, exc)
         return self._store_refresh(key, future, refreshed)
 
-    def _load_snapshot(self, key) -> StarterSnapshot:
+    def _season_frames(self, season: int, seasons: list[int], now: datetime) -> _SeasonFrames:
+        """Load (or reuse) the season-scoped feeds, cached once per season.
+
+        Reuses the `now` already read by `snapshot()` for its own TTL check, rather
+        than reading the clock again here -- see the single-clock-read note in
+        `_load_snapshot` below, which this must not break.
+        """
+        cached = self._season_cache.get(season)
+        if cached is not None and now - cached.loaded_at < self._ttl:
+            return cached
+        frames = _SeasonFrames(
+            depth=self._depth_loader(seasons, save=False),
+            stats=self._stats_loader(seasons, save=False),
+            players=self._players_loader(save=False),
+            schedules=self._schedule_loader(seasons, save=False),
+            loaded_at=now,
+        )
+        self._season_cache[season] = frames
+        return frames
+
+    def _load_snapshot(self, key, now: datetime) -> StarterSnapshot:
         season, week = key
         # The prior season carries the "recent starter" for an early-season week; the
         # full corpus is deliberately not loaded behind a live request. See the plan.
+        # Only `targets` below differs per week -- every one of these four feeds is
+        # season-scoped, so it is loaded once per season and reused across weeks.
         seasons = [season - 1, season]
-        depth = self._depth_loader(seasons, save=False)
-        stats = self._stats_loader(seasons, save=False)
-        players = self._players_loader(save=False)
-        schedules = self._schedule_loader(seasons, save=False)
+        frames = self._season_frames(season, seasons, now)
         # A single clock read, reused for both the depth-chart cutoff and the
         # snapshot's own `observed_at`. The brief's own draft read the clock twice
         # here (once for each); besides letting the two values disagree under a
@@ -110,13 +156,14 @@ class NflverseStarterProvider:
         # tests: the flaky-reload test's fixed sequence of clock values only lines up
         # with "one now-read per snapshot() call, plus one more only when an actual
         # load is attempted" -- two reads per load consumes values meant for the next
-        # call's TTL check.
+        # call's TTL check. `_season_frames` reuses the `now` passed in above rather
+        # than reading the clock again, so this remains the only extra read per load.
         observed_at = self._clock()
         rows = starter_advisory(
-            qb_week_stats(stats),
-            depth,
-            schedules,
-            players,
+            qb_week_stats(frames.stats),
+            frames.depth,
+            frames.schedules,
+            frames.players,
             [(season, week)],
             cutoff=observed_at,
         )
@@ -134,7 +181,7 @@ class NflverseStarterProvider:
     def _stale_or_raise(self, key, future, exc):
         # Deliberate divergence from market/live.py: that provider has a
         # `_consume_completed` path that adopts a future which finished just after the
-        # timeout. Here the TTL is 30 minutes against a 20-second timeout, so discarding
+        # timeout. Here the TTL is 30 minutes against a 5-second timeout, so discarding
         # a late result costs at most one refresh cycle and is not worth the extra state.
         # De-duplication of in-flight work is NOT part of that divergence: a future that
         # is still running stays registered so concurrent callers for the same key

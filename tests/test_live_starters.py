@@ -68,6 +68,13 @@ def _provider(clock=None, **overrides):
     return NflverseStarterProvider(**kwargs)
 
 
+def test_default_timeout_is_reduced_toward_the_market_providers_five_seconds():
+    """I5(a): the default was 20.0s, four times the market provider's 5.0, so a
+    presentation-only column could add real latency ahead of the model."""
+    provider = _provider()
+    assert provider._timeout_seconds == 5.0
+
+
 def test_snapshot_returns_the_advisory_rows():
     snap = _provider().snapshot(2025, 5)
     assert isinstance(snap, StarterSnapshot)
@@ -124,6 +131,43 @@ def test_a_failing_load_after_a_good_one_returns_the_cache_marked_stale():
     snap = provider.snapshot(2025, 5)
     assert snap.stale is True
     assert snap.rows.iloc[0]["home_qb"] == "Tyler Huntley"
+
+
+def test_stepping_through_weeks_in_a_season_reuses_the_loaded_frames():
+    """I5(b): every loaded input in _load_snapshot is season-scoped (depth, stats,
+    players, schedules for [season-1, season]) -- only `targets` differs per week.
+    Stepping through weeks in the same season must not trigger a full four-feed
+    reload per week."""
+    schedules, depth, _stats, _players = _loaders()
+    extra_week = pd.concat(
+        [
+            schedules,
+            pd.DataFrame(
+                {
+                    "game_id": ["2025_06_CIN_BAL"],
+                    "season": [2025],
+                    "week": [6],
+                    "home_team": ["BAL"],
+                    "away_team": ["CIN"],
+                    "kickoff_at": [pd.Timestamp("2025-10-12 17:00", tz="UTC")],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    calls = []
+
+    def counting_depth(seasons, save=False):
+        calls.append(list(seasons))
+        return depth
+
+    provider = _provider(
+        depth_loader=counting_depth,
+        schedule_loader=lambda seasons=None, save=False: extra_week,
+    )
+    provider.snapshot(2025, 5)
+    provider.snapshot(2025, 6)
+    assert calls == [[2024, 2025]], "the second week must reuse the cached season load"
 
 
 def test_stats_loader_is_asked_for_the_prior_and_current_season_only():

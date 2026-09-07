@@ -659,3 +659,29 @@ def test_the_advisory_never_moves_a_web_prediction(monkeypatch):
 
     for key in ("model_spread", "model_total", "spread_gap", "total_gap", "edge_flag"):
         assert without[key] == with_advisory[key], key
+
+
+def test_starter_fetch_happens_after_the_model_bundle_is_fit(monkeypatch):
+    """I5(a): scripts/slate.py correctly fetches starters AFTER `probs`; service.py
+    fetched them BEFORE `self._bundle(...)`, with a 20s timeout (four times the
+    market provider's 5.0) -- so a presentation-only column could add real latency
+    ahead of the model finishing its own fit/predict work."""
+    order = []
+
+    class RecordingStarterProvider:
+        def snapshot(self, season, week):
+            order.append("starters")
+            return StarterSnapshot(rows=_advisory_rows(), observed_at=datetime(2026, 9, 8, 12, tzinfo=UTC))
+
+    service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=RecordingStarterProvider())
+    original_fit_bundle = service._fit_bundle
+
+    def recording_fit_bundle(season, estimator):
+        order.append("bundle")
+        return original_fit_bundle(season, estimator)
+
+    monkeypatch.setattr(service, "_fit_bundle", recording_fit_bundle)
+
+    service.payload(2026, 1, "ridge", 2.0)
+
+    assert order == ["bundle", "starters"]
