@@ -269,6 +269,21 @@ Do not introduce reverse dependencies. Package ownership is strict:
   convention, positive = home favored) end to end — keeping one sign convention is what
   keeps this from quietly inverting every pick. `edge_flag` is 1 when
   `abs(spread_gap) >= edge_threshold`; it is a flag, not advice.
+- `market/live_starters.py` — the expected-starter advisory. `web/runtime.py` wires
+  `NflverseStarterProvider` into the production app unconditionally, alongside
+  `NflverseMarketProvider`; without that wiring the feature is inert. It is
+  PRESENTATION, joined onto the slate after prediction and after `edge_flag`, so no
+  advisory failure can move `model_margin`, `model_total` or `edge_flag` —
+  `tests/test_compare.py::test_the_overlay_never_moves_a_prediction_or_a_flag` pins
+  that directly. `qb_watch` is a separate marker from `edge_flag`, which is unchanged:
+  `qb_watch` null means "unknown" (feed unreachable) and 0 means "no change" — different
+  facts, rendered differently by the dashboard — while suppressing `edge_flag` on a
+  starter change would make one flag mean two things. Its `qb_change_epa` is NOT the
+  Ridge-v2 C2 research figure: the provider's TTL is 30 minutes (the market module's is
+  5) and it loads player stats for `[season - 1, season]` only, while C2 trains on the
+  full corpus — advisory numbers must never be quoted as research numbers.
+  `scripts/slate.py --no-starters` skips the live fetch entirely. The advisory is never
+  written to a packaged artifact and never reaches the tracker.
 - `tracking/` — tracker artifacts are built offline and read only at runtime. Only Ridge
   `ridge-v1` is official. Historical and live records must never aggregate together;
   thresholds are fixed at 2 points for qualified picks and cumulative 5/10/15-point
