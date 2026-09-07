@@ -39,6 +39,7 @@ PAGE = """<!doctype html>
   th, td { border-bottom: 1px solid #ddd; padding: .5rem; text-align: right; }
   th:first-child, td:first-child { text-align: left; }
   .edge { font-weight: 700; color: #087443; }
+  .qb-watch { background: #fff6e0; }
   .note { color: #555; font-size: .9rem; }
 </style>
 <main>
@@ -120,6 +121,18 @@ function formatted(value, kind) {
   return number.toFixed(1);
 }
 
+function qbCell(game) {
+  if (game.qb_watch === null || game.qb_watch === undefined) return 'n/a';
+  if (game.qb_watch !== 1) return '';
+  const parts = [];
+  for (const [name, delta] of [[game.home_qb, game.qb_change_epa_home],
+                               [game.away_qb, game.qb_change_epa_away]]) {
+    if (delta === null || delta === undefined || delta === 0) continue;
+    parts.push(`${name === null ? 'unknown' : name} ${delta > 0 ? '+' : ''}${delta.toFixed(2)}`);
+  }
+  return (parts.join('; ') || 'change') + (game.qb_inferred === 1 ? ' (inferred)' : '');
+}
+
 function renderMarket(market) {
   if (!market) {
     marketMessage.textContent = '';
@@ -143,6 +156,7 @@ function renderGames(games) {
     ['Gap', game => formatted(game.total_gap, 'signed')],
     ['Over%', game => formatted(game.over_prob, 'probability')],
     ['Edge', game => game.edge_flag === 1 ? '*' : ''],
+    ['QB', game => qbCell(game)],
   ];
   results.replaceChildren();
   const header = document.createElement('tr');
@@ -159,7 +173,10 @@ function renderGames(games) {
       cell.textContent = value(game);
       row.appendChild(cell);
     }
-    if (game.edge_flag === 1) row.className = 'edge';
+    const classes = [];
+    if (game.edge_flag === 1) classes.push('edge');
+    if (game.qb_watch === 1) classes.push('qb-watch');
+    if (classes.length) row.className = classes.join(' ');
     results.appendChild(row);
   }
 }

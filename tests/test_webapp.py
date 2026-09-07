@@ -380,9 +380,78 @@ def test_dashboard_initializes_selectors_and_renders_safe_game_values():
             "\N{EM DASH}",
             "\N{EM DASH}",
             "*",
+            "n/a",
         ],
     }
     assert state["marketMessage"] == "Lines updated 2026-09-01T12:00:00+00:00"
+
+
+def test_dashboard_renders_qb_advisory_cell_and_row_class():
+    """Catch a QB advisory cell that collapses null (unavailable) into 0 (no change)."""
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+    responses[slate_url]["body"]["games"] = [
+        {
+            **dashboard_game("AAA", "BBB"),
+            "qb_watch": 1,
+            "home_qb": "Tyler Huntley",
+            "away_qb": "Joe Burrow",
+            "qb_change_epa_home": -0.31,
+            "qb_change_epa_away": 0.0,
+            "qb_inferred": 0,
+        },
+        {
+            **dashboard_game("CCC", "DDD"),
+            "qb_watch": 0,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": None,
+            "qb_change_epa_away": None,
+            "qb_inferred": None,
+        },
+        {
+            **dashboard_game("EEE", "FFF"),
+            "qb_watch": None,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": None,
+            "qb_change_epa_away": None,
+            "qb_inferred": None,
+        },
+        {
+            **dashboard_game("GGG", "HHH"),
+            "qb_watch": 1,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": 0.0,
+            "qb_change_epa_away": 0.0,
+            "qb_inferred": 1,
+        },
+        {
+            **dashboard_game("III", "JJJ"),
+            "edge_flag": 1,
+            "qb_watch": 1,
+            "home_qb": "New Starter",
+            "away_qb": None,
+            "qb_change_epa_home": 1.5,
+            "qb_change_epa_away": None,
+            "qb_inferred": 0,
+        },
+    ]
+
+    state = dashboard_state(client(), responses, initialize_actions())
+
+    rows = state["rows"][1:]
+    assert rows[0]["cells"][-1] == "Tyler Huntley -0.31"
+    assert rows[0]["className"] == "qb-watch"
+    assert rows[1]["cells"][-1] == ""
+    assert rows[1]["className"] == ""
+    assert rows[2]["cells"][-1] == "n/a"
+    assert rows[2]["className"] == ""
+    assert rows[3]["cells"][-1] == "change (inferred)"
+    assert rows[3]["className"] == "qb-watch"
+    assert rows[4]["cells"][-1] == "New Starter +1.50"
+    assert rows[4]["className"] == "edge qb-watch"
 
 
 def test_dashboard_warns_when_market_data_is_stale():
