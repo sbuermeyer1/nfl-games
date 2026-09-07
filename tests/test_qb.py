@@ -190,10 +190,10 @@ def _cutoff_fixture():
             "kickoff_at": [pd.Timestamp("2025-10-05 17:00", tz="UTC")],
         }
     )
-    # 2025-era feed: daily `dt` snapshots, `pos_rank`, `club_code`, `pos_abb`.
+    # 2025-era feed: daily `dt` snapshots, `pos_rank`, `team`, `pos_abb`.
     depth = pd.DataFrame(
         {
-            "club_code": ["BAL", "BAL", "BAL", "BAL", "CIN", "CIN"],
+            "team": ["BAL", "BAL", "BAL", "BAL", "CIN", "CIN"],
             "gsis_id": ["LAMAR", "HUNT", "LAMAR", "HUNT", "BURROW", "BURROW"],
             "pos_abb": ["QB", "QB", "QB", "QB", "QB", "QB"],
             "pos_rank": [1.0, 2.0, 2.0, 1.0, 1.0, 1.0],
@@ -273,7 +273,7 @@ def test_naive_absolute_cutoff_raises():
 
 
 def _pre2025_era_fixture():
-    """The OTHER feed era: week-labelled charts, no `dt`, `team`/`position`/`depth_team`.
+    """The OTHER feed era: week-labelled charts, no `dt`, `club_code`/`position`/`depth_team`.
 
     The two eras share almost no columns, and `chart_as_of` takes a different branch for
     each -- the timestamped branch filters on `dt <= cutoff`, the labelled branch matches
@@ -285,7 +285,7 @@ def _pre2025_era_fixture():
         {
             "season": [2019, 2019, 2019, 2019],
             "week": [5, 5, 5, 5],
-            "team": ["BAL", "BAL", "CIN", "CIN"],
+            "club_code": ["BAL", "BAL", "CIN", "CIN"],
             "player_id": ["LAMAR", "HUNT", "BURROW", "OTHER"],
             "position": ["QB", "QB", "QB", "QB"],
             "depth_team": ["1", "2", "1", "2"],

@@ -1551,6 +1551,22 @@ Record the two printed column lists in this plan file under this step, verbatim.
 
 **If either fixture used a column the live feed does not populate for that era, fix the fixture before continuing** — the tests it feeds are worthless until it matches.
 
+**Observed output (2026-09-07, live `nflreadpy` fetch):**
+
+```
+2019 36308 ['club_code', 'depth_position', 'depth_team', 'elias_id', 'first_name', 'football_name', 'formation', 'full_name', 'game_type', 'gsis_id', 'jersey_number', 'last_name', 'position', 'season', 'week']
+2025 554215 ['dt', 'espn_id', 'gsis_id', 'player_name', 'pos_abb', 'pos_grp', 'pos_grp_id', 'pos_id', 'pos_name', 'pos_rank', 'pos_slot', 'team']
+```
+
+**This plan's own confirmation bullets above are wrong** (a fifth defect in this plan's own snippets, per the pattern already noted for earlier tasks): the live feed does not put `team` on 2019 rows or `club_code` on 2025 rows at all — it is the other way around. Confirmed by checking existence and null-count per column directly:
+
+- 2019 (pre-2025 era): `club_code` present (36308/36308 non-null), `team` **absent** from the frame entirely. `season`, `week`, `position`, `depth_team`, `gsis_id` present; `dt`, `pos_abb`, `pos_rank`, `player_id` absent.
+- 2025 era: `team` present (554215/554215 non-null), `club_code` **absent** from the frame entirely. `dt`, `pos_abb`, `pos_rank`, `gsis_id` present; `season`, `week`, `position`, `depth_team`, `player_id` absent.
+
+This matches the convention already documented elsewhere in the codebase — `tests/test_qb.py::_depth_history`'s own docstring ("the pre-2025 feed keys identity to `club_code` ... the 2025-era feed keys them to `team`") and `nfl_game.ratings.qb.normalize_depth_chart_history`'s docstring ("every pre-2025 row was dropped for a null `team` (its identity is in `club_code`)") — both written in earlier tasks and both correct.
+
+**Verdict: `_cutoff_fixture()` and `_pre2025_era_fixture()` (added in Tasks 3/4) had the team-identity column backwards for their era** — `_cutoff_fixture` (2025-era) used `club_code` instead of `team`; `_pre2025_era_fixture` used `team` instead of `club_code`. Fixed both in `tests/test_qb.py` as part of this task: `_cutoff_fixture`'s depth frame now uses `team`, `_pre2025_era_fixture`'s now uses `club_code`. Nothing else in either fixture was wrong: `position`/`depth_team`/`season`/`week` (pre-2025) and `pos_abb`/`pos_rank`/`dt`/`gsis_id` (2025-era) all match columns the live feed genuinely populates for that era. This swap was invisible to every existing test in `tests/test_qb.py` because `depth.py`'s `_TEAM_SOURCES = ("team", "club_code")` coalesces either spelling identically regardless of which era it came from — only a live-feed comparison catches it, which is the entire point of this task.
+
 - [ ] **Step 2: Write the offline drift test**
 
 This runs in CI without a network. It pins the hand-written fixtures against the column spellings `depth.py` actually coalesces, so a future feed rename that updates `depth.py` but not the fixtures fails loudly.
