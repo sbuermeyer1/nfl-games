@@ -1,6 +1,6 @@
 import pandas as pd
 
-from nfl_game.market.compare import SLATE_COLS, build_slate, slate_markdown
+from nfl_game.market.compare import SLATE_COLS, _qb_cell, build_slate, slate_markdown
 
 
 def _inputs():
@@ -312,3 +312,38 @@ def test_markdown_renders_a_missing_advisory_as_not_available():
     md = slate_markdown(build_slate(*_inputs()))
     assert "| QB |" in md
     assert "nan" not in md.lower()
+
+
+def test_game_id_dtype_is_identical_with_and_without_starters():
+    # `game_id` is a pre-existing column, not one of the six advisory columns, and its
+    # dtype is not part of this feature's contract. Without a `starters` argument it was
+    # left as plain object/str; supplying `starters` flipped it to pandas StringDtype via
+    # the cast inside that branch. No production call site passes `starters` today, so
+    # this was dormant -- but the dtype must not depend on an optional argument's
+    # presence, or a later caller that does pass `starters` inherits a silent dtype
+    # change on a column nothing about this feature is supposed to touch.
+    feats, preds, probs = _inputs()
+    without = build_slate(feats, preds, probs)
+    game_id = without["game_id"].iloc[0]
+    with_advisory = build_slate(feats, preds, probs, starters=_advisory(game_id))
+    assert without["game_id"].dtype == with_advisory["game_id"].dtype
+
+
+def test_qb_cell_handles_null_qb_inferred_with_qb_watch_one():
+    # qb_inferred and qb_watch are always derived from the same `known` mask in
+    # ratings/starters.py today, so they can't disagree in production -- but _qb_cell
+    # takes an arbitrary row with no such guarantee. If qb_watch == 1 while qb_inferred
+    # is null, `row.qb_inferred == 1` evaluates to `pd.NA`, and `"..." if pd.NA else
+    # "..."` raises TypeError: boolean value of NA is ambiguous. _qb_cell must treat a
+    # null qb_inferred as "not inferred" (no suffix) rather than raising.
+    row = pd.Series(
+        {
+            "home_qb": "Tyler Huntley",
+            "away_qb": "Joe Burrow",
+            "qb_change_epa_home": -0.31,
+            "qb_change_epa_away": 0.0,
+            "qb_watch": pd.array([1], dtype="Int64")[0],
+            "qb_inferred": pd.NA,
+        }
+    )
+    assert _qb_cell(row) == "Tyler Huntley -0.31"

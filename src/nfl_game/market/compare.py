@@ -77,10 +77,13 @@ def build_slate(
 
     # Joined after edge_flag on purpose: every column above this line is computed from
     # the model and the market alone, so no advisory failure mode can reach them.
+    # game_id's dtype must not depend on whether `starters` was supplied -- it is a
+    # pre-existing column, not one of the six advisory columns, so casting it only
+    # inside this branch would make the dtype flip based on an optional argument.
+    df["game_id"] = df["game_id"].astype("string")
     if starters is not None and not starters.empty:
         advisory = starters.drop_duplicates("game_id").copy()
         advisory["game_id"] = advisory["game_id"].astype("string")
-        df["game_id"] = df["game_id"].astype("string")
         df = df.merge(advisory, on="game_id", how="left", validate="one_to_one")
     for name, dtype in _ADVISORY_DTYPES.items():
         if name not in df:
@@ -128,7 +131,7 @@ def _qb_cell(row) -> str:
             continue
         label = "unknown" if pd.isna(name) else name
         parts.append(f"{label} {delta:+.2f}")
-    suffix = " (inferred)" if row.qb_inferred == 1 else ""
+    suffix = " (inferred)" if not pd.isna(row.qb_inferred) and row.qb_inferred == 1 else ""
     return ("; ".join(parts) or "change") + suffix
 
 
