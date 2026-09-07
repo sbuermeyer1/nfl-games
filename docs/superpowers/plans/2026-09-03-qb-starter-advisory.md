@@ -960,18 +960,34 @@ class NflverseStarterProvider:
         return refreshed
 
     def _stale_or_raise(self, key, future, exc):
-        # Deliberate divergence from market/live.py: that provider has a
-        # `_consume_completed` path that adopts a future which finished just after the
-        # timeout. Here the TTL is 30 minutes against a 20-second timeout, so discarding
-        # a late result costs at most one refresh cycle and is not worth the extra state.
+        # One deliberate divergence from market/live.py, and one property that must NOT
+        # diverge.
+        #
+        # Diverges: that provider has a `_consume_completed` path adopting a future that
+        # finished just after the timeout. Here the TTL is 30 minutes against a 20-second
+        # timeout, so discarding a late result costs at most one refresh cycle.
+        #
+        # Must NOT diverge: the `future.done()` gate below. A future that is still
+        # RUNNING stays registered so the next caller for this key rendezvous on it
+        # instead of resubmitting. The executor is max_workers=1, so popping an
+        # in-flight future makes every timed-out poller queue a fresh duplicate load
+        # behind the one already running, and recovery from a slow feed scales with the
+        # number of pollers instead of staying bounded.
         with self._lock:
-            if self._futures.get(key) is future:
+            if future.done() and self._futures.get(key) is future:
                 self._futures.pop(key)
             cached = self._snapshots.get(key)
         if cached is not None:
             return replace(cached, rows=cached.rows.copy(deep=True), stale=True)
         raise StartersUnavailableError("expected-starter feed unavailable") from exc
 ```
+
+**Test the still-running-future timeout, not just a fast raise.** A loader that raises
+synchronously exercises the `future.done()` path; only a loader that genuinely blocks
+exercises the timeout path this gate protects. `tests/test_live_market.py:138-163`
+(`test_cold_timeout_keeps_future_registered_for_later_consumption`) pins the same property
+for the sibling provider — follow it. Use a bounded block and a small `timeout_seconds`,
+and release the blocked worker before the test ends so the suite cannot hang.
 
 Note the `cutoff=self._clock()` — the live advisory reads the chart as of *now*, which is the whole point of Task 1.
 
