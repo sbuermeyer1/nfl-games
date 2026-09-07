@@ -1318,9 +1318,24 @@ git commit -m "feat: show the expected-starter advisory on the CLI slate"
 **Files:**
 - Modify: `src/nfl_game/web/service.py:128-161` (constructor), `:328-353` (`_slate_result`), `:344-352` (status columns), and `payload`
 - Modify: `src/nfl_game/web/app.py:134-165` (`renderGames`)
+- Modify: `src/nfl_game/web/runtime.py:60-95` (`load_app`) — **required, or the feature
+  ships inert.** `load_app` constructs `NflverseMarketProvider()` and passes it to
+  `SlateService.from_parquet`; without the same treatment for the starter provider,
+  `_starter_provider` is `None` in production, `payload()["starters"]` is always `None`,
+  and every QB cell renders `n/a` forever while every test passes. Wire it
+  unconditionally, mirroring the market provider, and add a test to
+  `tests/test_web_runtime.py` proving `load_app` produces a service with a provider
+  configured — otherwise this silently regresses to inert.
+  Note `runtime.py` deliberately fails CLOSED on a bad packaged artifact. The advisory is
+  presentation only and must never prevent startup, so do not widen any existing `try`
+  in a way that could swallow a genuine artifact failure.
 - Test: `tests/test_web_service.py` — it already provides the `feature_rows()` and
   `feature_rows_with_2026_weeks()` helpers and constructs `SlateService(rows, ...)`
   positionally. There is no `_service(tmp_path)` helper; do not invent one.
+  **The Step 1 tests below cannot build on `feature_rows_with_2026_weeks()` alone** —
+  `SlateService` raises `SlateUnavailableError` on degenerate features before the
+  advisory is ever reached. Route them through the file's existing
+  `fake_fitted_2026_service` monkeypatch helper, extended to take a `starter_provider`.
 
 **Interfaces:**
 - Consumes: `NflverseStarterProvider`, `StarterSnapshot`, `StartersUnavailableError` from Task 4.
