@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from threading import Event
 
 import pandas as pd
 import pytest
@@ -134,3 +135,38 @@ def test_stats_loader_is_asked_for_the_prior_and_current_season_only():
 
     _provider(stats_loader=recording_stats).snapshot(2025, 5)
     assert seen == [[2024, 2025]]
+
+
+def test_cold_timeout_keeps_future_registered_for_later_consumption():
+    started = Event()
+    release = Event()
+    completed = Event()
+    calls = []
+
+    def slow_depth(seasons, save=False):
+        calls.append(list(seasons))
+        started.set()
+        # Bounded block: released explicitly below, with a timeout as a backstop
+        # so this thread cannot hang the suite even if the assertions fail first.
+        release.wait(timeout=5)
+        return _loaders()[1]
+
+    provider = _provider(depth_loader=slow_depth, timeout_seconds=0.01)
+    try:
+        with pytest.raises(StartersUnavailableError, match="expected-starter feed unavailable"):
+            provider.snapshot(2025, 5)
+        assert started.wait(timeout=1)
+
+        key = (2025, 5)
+        registered = provider._futures.get(key)
+        assert registered is not None, "still-running future must stay registered on timeout"
+        assert not registered.done()
+        registered.add_done_callback(lambda _future: completed.set())
+    finally:
+        release.set()
+
+    assert completed.wait(timeout=1)
+
+    snapshot = provider.snapshot(2025, 5)
+    assert calls == [[2024, 2025]], "a follow-up call must not submit a second load"
+    assert snapshot.stale is False

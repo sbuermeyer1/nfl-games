@@ -2,7 +2,9 @@
 
 Mirrors `market/live.py`'s snapshot/TTL/stale/fallback contract deliberately: the two
 overlays have the same failure modes and should behave the same way under them. The TTL
-is longer because depth charts publish daily at most.
+is longer because depth charts publish daily at most. The one deliberate divergence is
+late-result adoption on timeout -- see `_stale_or_raise` below; in-flight de-duplication
+itself is mirrored, not diverged.
 
 This is presentation, not a model input: nothing here reaches `FEATURE_COLS`, and a
 failed refresh degrades to a missing or stale advisory, never to a failed prediction.
@@ -134,8 +136,11 @@ class NflverseStarterProvider:
         # `_consume_completed` path that adopts a future which finished just after the
         # timeout. Here the TTL is 30 minutes against a 20-second timeout, so discarding
         # a late result costs at most one refresh cycle and is not worth the extra state.
+        # De-duplication of in-flight work is NOT part of that divergence: a future that
+        # is still running stays registered so concurrent callers for the same key
+        # rendezvous on it instead of each queueing a redundant reload behind it.
         with self._lock:
-            if self._futures.get(key) is future:
+            if future.done() and self._futures.get(key) is future:
                 self._futures.pop(key)
             cached = self._snapshots.get(key)
         if cached is not None:
