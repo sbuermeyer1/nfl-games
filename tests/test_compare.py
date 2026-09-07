@@ -316,12 +316,16 @@ def test_markdown_renders_a_missing_advisory_as_not_available():
 
 def test_game_id_dtype_is_identical_with_and_without_starters():
     # `game_id` is a pre-existing column, not one of the six advisory columns, and its
-    # dtype is not part of this feature's contract. Without a `starters` argument it was
-    # left as plain object/str; supplying `starters` flipped it to pandas StringDtype via
-    # the cast inside that branch. No production call site passes `starters` today, so
-    # this was dormant -- but the dtype must not depend on an optional argument's
-    # presence, or a later caller that does pass `starters` inherits a silent dtype
-    # change on a column nothing about this feature is supposed to touch.
+    # dtype is not part of this feature's contract. The cast to pandas StringDtype in
+    # build_slate is unconditional (it runs before the `if starters is not None` check,
+    # not inside it), so EVERY caller's game_id is StringDtype now, whether or not
+    # `starters` is passed -- this is not "dormant" (unreached code): both
+    # scripts/slate.py and web/service.py already call build_slate with a `starters`
+    # keyword (sometimes None) on every real request. What the cast actually is is
+    # INERT at the boundaries this slate feeds -- JSON, CSV and the tracker all
+    # round-trip StringDtype and plain object/str identically -- which is a narrower,
+    # weaker claim than "unreachable." The dtype must still not depend on whether
+    # `starters` was supplied, so this pin stays as a regression guard regardless.
     feats, preds, probs = _inputs()
     without = build_slate(feats, preds, probs)
     game_id = without["game_id"].iloc[0]

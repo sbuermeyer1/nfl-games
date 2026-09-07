@@ -1,4 +1,13 @@
-"""Leak-free quarterback context and expected-starter features."""
+"""Leak-free quarterback context and expected-starter features.
+
+Leak-freedom holds for `cutoff=None` (kickoff itself) and `cutoff=Timedelta` (kickoff
+minus a fixed lead, per game): both resolve to an instant at or before that game's own
+kickoff. An absolute `cutoff=Timestamp` is a live-advisory affordance -- one instant
+shared by every game in the request, which can be LATER than a given game's kickoff
+once that game has been played -- and must never be used in a feature build; only
+`nfl_game.market.live_starters` passes one, for a live overlay that is joined onto the
+slate after prediction and never reaches `FEATURE_COLS`.
+"""
 
 from __future__ import annotations
 
@@ -172,7 +181,21 @@ def qb_features_for_targets(
     targets: list[tuple[int, int]],
     cutoff: CutoffPolicy = None,
 ) -> pd.DataFrame:
-    """Build as-of QB features for both teams in each requested scheduled game."""
+    """Build as-of QB features for both teams in each requested scheduled game.
+
+    `cutoff` (see `CutoffPolicy` and `_cutoff_for`) controls how far into a depth
+    chart's history each game may look:
+    - `None` (default): the cutoff is that game's own kickoff. This is the original
+      behavior, kept byte-identical so the Ridge-v2 research output stays
+      reproducible -- do not change its numeric output or this default.
+    - `pd.Timedelta`: kickoff minus that lead, per game -- what a published pick
+      actually had available.
+    - `pd.Timestamp` (must be timezone-aware): one absolute instant shared by every
+      game in `targets`. This is a live-advisory affordance ONLY -- it is how
+      `nfl_game.market.live_starters` asks "what does the chart look like right now"
+      -- and must never be used in a feature build, since it can be later than a
+      played game's own kickoff.
+    """
     games = _targets_from_schedule(schedules, targets, cutoff)
     columns = [
         "season",
