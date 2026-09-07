@@ -40,12 +40,22 @@ def test_each_fixture_column_is_one_depth_py_actually_reads():
 
 
 def test_the_two_fixture_eras_are_genuinely_disjoint_on_identity():
-    """If the two fixtures share an identity spelling, one is not a separate era.
+    """If the two fixtures share a team/position spelling, one is not a separate era.
 
     `chart_as_of` branches on which era a row belongs to. Two fixtures that both
     spell the team `team` exercise one branch twice and leave the other unpinned.
+
+    `gsis_id` is deliberately NOT in this set. The original draft of this test
+    included it alongside `player_id`, on the assumption that player identity
+    splits by era the same way team identity does. Step 1's live fetch disproves
+    that: `gsis_id` is the one column the real 2019 and 2025 feeds both populate
+    (every other overlap-candidate column -- club_code/team, position/pos_abb,
+    depth_team/pos_rank, season/week/dt -- is genuinely era-exclusive). Keeping
+    `gsis_id` in this set would force both fixtures to disagree on a column the
+    live feed agrees on, which is exactly the kind of invented-schema mismatch
+    this task exists to prevent, not enforce.
     """
-    identity = {"club_code", "team", "gsis_id", "player_id", "pos_abb", "position"}
+    identity = {"club_code", "team", "pos_abb", "position"}
     shared = _timestamped_fixture_columns() & _labelled_fixture_columns() & identity
     assert not shared, sorted(shared)
 
@@ -75,3 +85,20 @@ def test_each_era_uses_the_team_spelling_the_live_feed_actually_carries():
     labelled, _ = _pre2025_era_fixture()
     assert "team" in timestamped.columns and "club_code" not in timestamped.columns
     assert "club_code" in labelled.columns and "team" not in labelled.columns
+
+
+def test_each_era_uses_the_player_identity_spelling_the_live_feed_actually_carries():
+    """The same swap risk as the team spelling above, for player identity.
+
+    `_PLAYER_SOURCES` accepts both `player_id` and `gsis_id`, and both fixtures feed
+    into the same coalesce, so a fixture using the wrong spelling for its era passes
+    the membership and disjointness checks above and every functional test in
+    test_qb.py -- neither observes which raw spelling fed the canonical `player_id`
+    column downstream. Only a live inspection of the feed (recorded in this plan's
+    Task 8, Step 1) shows that NEITHER era ever populates `player_id`: both the 2019
+    and the 2025 feed carry `gsis_id`, so both fixtures are pinned to it here.
+    """
+    _, timestamped, _ = _cutoff_fixture()
+    labelled, _ = _pre2025_era_fixture()
+    assert "gsis_id" in timestamped.columns and "player_id" not in timestamped.columns
+    assert "gsis_id" in labelled.columns and "player_id" not in labelled.columns

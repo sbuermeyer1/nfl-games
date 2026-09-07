@@ -278,7 +278,8 @@ def _pre2025_era_fixture():
     The two eras share almost no columns, and `chart_as_of` takes a different branch for
     each -- the timestamped branch filters on `dt <= cutoff`, the labelled branch matches
     season/week and cannot see a cutoff at all. A test that exercises only the 2025-era
-    feed leaves the entire labelled branch unpinned.
+    feed leaves the entire labelled branch unpinned. Player identity is `gsis_id` here,
+    matching the live 2019 feed, which never populates `player_id`.
     """
     _, _, schedules = _cutoff_fixture()
     depth = pd.DataFrame(
@@ -286,7 +287,7 @@ def _pre2025_era_fixture():
             "season": [2019, 2019, 2019, 2019],
             "week": [5, 5, 5, 5],
             "club_code": ["BAL", "BAL", "CIN", "CIN"],
-            "player_id": ["LAMAR", "HUNT", "BURROW", "OTHER"],
+            "gsis_id": ["LAMAR", "HUNT", "BURROW", "OTHER"],
             "position": ["QB", "QB", "QB", "QB"],
             "depth_team": ["1", "2", "1", "2"],
         }
