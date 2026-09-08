@@ -85,7 +85,16 @@ class NflverseStarterProvider:
         schedule_loader=load_schedules,
         clock=lambda: datetime.now(UTC),
         ttl=timedelta(minutes=30),
-        timeout_seconds=5.0,
+        # Measured cold load on a dev machine: depth charts (2025+2026) 4.85s, stats
+        # 2026 (404 path) 0.02s, stats 2025 1.46s, players 0.49s, schedules 0.16s --
+        # total ~6.98s. This is NOT the market provider's 5.0s: that provider loads
+        # one schedule feed, this one loads four, and depth-chart parsing alone is
+        # ~4.85s of that -- already over budget at 5.0. 15.0 clears the measured
+        # figure with headroom for a slower network or a cold Render dyno, while
+        # staying well under the original 20.0 that a review found could block the
+        # web dashboard's primary content (fixed instead by fetching this AFTER
+        # `_bundle(...)` in web/service.py -- see that fix; do not revert it).
+        timeout_seconds=15.0,
     ):
         self._depth_loader = depth_loader
         self._stats_loader = stats_loader

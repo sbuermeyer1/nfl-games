@@ -68,11 +68,16 @@ def _provider(clock=None, **overrides):
     return NflverseStarterProvider(**kwargs)
 
 
-def test_default_timeout_is_reduced_toward_the_market_providers_five_seconds():
-    """I5(a): the default was 20.0s, four times the market provider's 5.0, so a
-    presentation-only column could add real latency ahead of the model."""
+def test_default_timeout_covers_the_measured_four_feed_cold_load():
+    """I5(a) found the original 20.0s could let a presentation-only column add real
+    latency ahead of the model; that was fixed by moving the fetch after `_bundle(...)`
+    in web/service.py, not by shrinking the timeout to the market provider's 5.0 --
+    this provider loads four feeds (depth, stats, players, schedules) where the market
+    provider loads one schedule, and a measured cold load came in at ~6.98s, already
+    over a 5.0s budget. 15.0 clears that measurement with headroom while staying well
+    under the original 20.0."""
     provider = _provider()
-    assert provider._timeout_seconds == 5.0
+    assert provider._timeout_seconds == 15.0
 
 
 def test_snapshot_returns_the_advisory_rows():
@@ -187,7 +192,10 @@ def test_stepping_through_weeks_in_a_season_reuses_the_loaded_frames():
     provider.snapshot(2025, 5)
     provider.snapshot(2025, 6)
     assert depth_calls == [[2024, 2025]], "the second week must reuse the cached season load"
-    assert len(stats_calls) == 1, "stats must also be cached across weeks, not just depth"
+    assert stats_calls == [[2024], [2025]], (
+        "stats must also be cached across weeks, not just depth -- one call per season "
+        "from the first week's load, and none added by the second week's cache hit"
+    )
     assert len(players_calls) == 1, "players must also be cached across weeks, not just depth"
     assert len(schedule_calls) == 1, "schedules must also be cached across weeks, not just depth"
 
@@ -238,6 +246,12 @@ def test_a_second_weeks_snapshot_reports_the_season_frames_actual_load_time():
 
 
 def test_stats_loader_is_asked_for_the_prior_and_current_season_only():
+    """Stats are loaded one season at a time (see `_load_stats_per_season`), not as a
+    single combined [season-1, season] request -- so both seasons must still show up
+    as separate calls. Asserting each season individually (not just `len(seen) == 2`)
+    means a future change that silently drops the current season once a 2026 stats
+    file exists -- a regression invisible today because there is no such file to
+    drop -- would still fail this test."""
     seen = []
 
     def recording_stats(seasons, save=False):
@@ -245,7 +259,7 @@ def test_stats_loader_is_asked_for_the_prior_and_current_season_only():
         return _loaders()[2]
 
     _provider(stats_loader=recording_stats).snapshot(2025, 5)
-    assert seen == [[2024, 2025]]
+    assert seen == [[2024], [2025]]
 
 
 def _loaders_2026():
