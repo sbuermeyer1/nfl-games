@@ -129,6 +129,13 @@ class NflverseStarterProvider:
         `_load_snapshot` below, which this must not break.
         """
         cached = self._season_cache.get(season)
+        # Deliberately reuses self._ttl -- the same TTL that bounds the per-(season,
+        # week) snapshot cache in snapshot() above. test_a_failing_load_after_a_good_
+        # one_returns_the_cache_marked_stale relies on this: its single 10-hour clock
+        # jump must expire BOTH caches for the flaky reload to even be attempted. If
+        # this season cache is ever given its own (e.g. longer) TTL, that test would
+        # pass vacuously -- the stale season frames would short-circuit the reload
+        # and nobody would be told the flaky-loader path went untested.
         if cached is not None and now - cached.loaded_at < self._ttl:
             return cached
         frames = _SeasonFrames(
@@ -149,23 +156,34 @@ class NflverseStarterProvider:
         # season-scoped, so it is loaded once per season and reused across weeks.
         seasons = [season - 1, season]
         frames = self._season_frames(season, seasons, now)
-        # A single clock read, reused for both the depth-chart cutoff and the
-        # snapshot's own `observed_at`. The brief's own draft read the clock twice
-        # here (once for each); besides letting the two values disagree under a
-        # fast-moving clock, it also breaks against an iterator-based fake clock in
-        # tests: the flaky-reload test's fixed sequence of clock values only lines up
-        # with "one now-read per snapshot() call, plus one more only when an actual
-        # load is attempted" -- two reads per load consumes values meant for the next
-        # call's TTL check. `_season_frames` reuses the `now` passed in above rather
-        # than reading the clock again, so this remains the only extra read per load.
-        observed_at = self._clock()
+        # `observed_at` must be the season frames' OWN load time, not this build's
+        # clock reading. `_season_frames` can return frames loaded up to one TTL
+        # earlier than this call (a cross-week request reusing the season cache --
+        # see `_SeasonFrames`/`_season_frames` above), and stamping the build clock
+        # here would report the snapshot as fresher than the depth chart it was
+        # actually built from -- up to two TTLs stale while `stale` still reads
+        # False. See
+        # test_a_second_weeks_snapshot_reports_the_season_frames_actual_load_time.
+        #
+        # We still read the clock exactly once here (now for the depth-chart cutoff
+        # only), matching the read count from before this fix: `_season_frames`
+        # reuses the `now` passed in above rather than reading the clock again, so
+        # this remains the only extra read per load. That count still matters -- the
+        # flaky-reload test (`test_a_failing_load_after_a_good_one_returns_the_cache_
+        # marked_stale`) drives an iterator-based fake clock whose fixed sequence of
+        # values only lines up with "one now-read per snapshot() call, plus one more
+        # only when an actual load is attempted"; a second or missing read here
+        # would desync it. An earlier draft of this fix dropped this read (using
+        # `frames.loaded_at` for the cutoff too) and broke exactly that test.
+        cutoff = self._clock()
+        observed_at = frames.loaded_at
         rows = starter_advisory(
             qb_week_stats(frames.stats),
             frames.depth,
             frames.schedules,
             frames.players,
             [(season, week)],
-            cutoff=observed_at,
+            cutoff=cutoff,
         )
         return StarterSnapshot(rows=rows.copy(deep=True), observed_at=observed_at)
 

@@ -137,8 +137,10 @@ def test_stepping_through_weeks_in_a_season_reuses_the_loaded_frames():
     """I5(b): every loaded input in _load_snapshot is season-scoped (depth, stats,
     players, schedules for [season-1, season]) -- only `targets` differs per week.
     Stepping through weeks in the same season must not trigger a full four-feed
-    reload per week."""
-    schedules, depth, _stats, _players = _loaders()
+    reload per week. Counts all four loaders (Minor 4): counting only depth would
+    still pass if stats/players/schedules caching were ever reverted while depth
+    stayed cached."""
+    schedules, depth, stats, players = _loaders()
     extra_week = pd.concat(
         [
             schedules,
@@ -155,19 +157,84 @@ def test_stepping_through_weeks_in_a_season_reuses_the_loaded_frames():
         ],
         ignore_index=True,
     )
-    calls = []
+    depth_calls = []
+    stats_calls = []
+    players_calls = []
+    schedule_calls = []
 
     def counting_depth(seasons, save=False):
-        calls.append(list(seasons))
+        depth_calls.append(list(seasons))
         return depth
+
+    def counting_stats(seasons, save=False):
+        stats_calls.append(list(seasons))
+        return stats
+
+    def counting_players(save=False):
+        players_calls.append(True)
+        return players
+
+    def counting_schedules(seasons=None, save=False):
+        schedule_calls.append(True)
+        return extra_week
 
     provider = _provider(
         depth_loader=counting_depth,
-        schedule_loader=lambda seasons=None, save=False: extra_week,
+        stats_loader=counting_stats,
+        players_loader=counting_players,
+        schedule_loader=counting_schedules,
     )
     provider.snapshot(2025, 5)
     provider.snapshot(2025, 6)
-    assert calls == [[2024, 2025]], "the second week must reuse the cached season load"
+    assert depth_calls == [[2024, 2025]], "the second week must reuse the cached season load"
+    assert len(stats_calls) == 1, "stats must also be cached across weeks, not just depth"
+    assert len(players_calls) == 1, "players must also be cached across weeks, not just depth"
+    assert len(schedule_calls) == 1, "schedules must also be cached across weeks, not just depth"
+
+
+def test_a_second_weeks_snapshot_reports_the_season_frames_actual_load_time():
+    """I5b's season cache (_season_frames) can serve depth/stats/players/schedules
+    loaded up to one TTL earlier than a later week's snapshot build. `observed_at`
+    must report when those feeds were actually fetched, not this build's clock --
+    otherwise a cross-week request can serve a ~59-minute-old depth chart while
+    reporting `stale=False` and an `observed_at` up to 30 minutes newer than the
+    data it describes. A snapshot must never report a timestamp newer than the
+    frames it was built from."""
+    schedules, _depth, _stats, _players = _loaders()
+    extra_week = pd.concat(
+        [
+            schedules,
+            pd.DataFrame(
+                {
+                    "game_id": ["2025_06_CIN_BAL"],
+                    "season": [2025],
+                    "week": [6],
+                    "home_team": ["BAL"],
+                    "away_team": ["CIN"],
+                    "kickoff_at": [pd.Timestamp("2025-10-12 17:00", tz="UTC")],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    loaded_at = datetime(2025, 10, 4, 13, 0, tzinfo=UTC)
+    built_at = datetime(2025, 10, 4, 13, 29, tzinfo=UTC)  # within the season cache's TTL
+    box = {"now": loaded_at}
+
+    provider = _provider(
+        clock=lambda: box["now"],
+        schedule_loader=lambda seasons=None, save=False: extra_week,
+    )
+    provider.snapshot(2025, 5)
+
+    box["now"] = built_at
+    snap = provider.snapshot(2025, 6)
+
+    assert snap.observed_at == loaded_at, (
+        "a second week's snapshot must report when the season frames were actually "
+        "fetched, not the later build time"
+    )
+    assert snap.stale is False
 
 
 def test_stats_loader_is_asked_for_the_prior_and_current_season_only():
