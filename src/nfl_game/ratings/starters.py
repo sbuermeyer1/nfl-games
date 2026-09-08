@@ -88,6 +88,12 @@ def starter_advisory(
             left_on=["season", "week", f"{side}_team"],
             right_on=["season", "week", "team"],
             how="left",
+            # Defensive only: `per_team` is one row per (season, week, team) by
+            # construction (qb_features_for_targets / _targets_from_schedule), and
+            # `games` is deduplicated by game_id above, so this holds today. Turns a
+            # future violation of that invariant into a clear merge error instead of
+            # a confusing shape-mismatch stack trace.
+            validate="many_to_one",
         )
         out[f"{side}_qb"] = (
             merged["expected_starter_id"].map(names).astype("string").to_numpy()

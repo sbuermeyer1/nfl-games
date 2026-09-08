@@ -140,3 +140,36 @@ def test_empty_targets_yield_an_empty_frame_with_the_full_schema():
     out = starter_advisory(weeks, depth, schedules, _players(), [], cutoff=None)
     assert out.empty
     assert list(out.columns) == ADVISORY_COLS
+
+
+def test_a_season_week_with_no_scheduled_games_yields_the_full_schema():
+    """Covers the `per_team.empty` early return: a target season/week the schedule
+    has no games for. `qb_features_for_targets`'s own games-merge (schedules inner-
+    joined on the requested season/week) is empty here, so `per_team` comes back
+    empty and the function returns before it ever computes its own local `games`."""
+    weeks, depth, schedules = _fixture()
+    out = starter_advisory(weeks, depth, schedules, _players(), [(2099, 1)], cutoff=None)
+    assert out.empty
+    assert list(out.columns) == ADVISORY_COLS
+
+
+def test_games_empty_still_yields_the_full_schema(monkeypatch):
+    """Covers the `games.empty` early return in starter_advisory itself.
+
+    In real use this line is never reached separately from `per_team.empty` above:
+    both are computed from the identical schedules-inner-joined-on-targets merge, so
+    whenever one is empty so is the other, and `per_team.empty` is checked first. The
+    `games.empty` check below it is defensive-only under today's code -- reachable
+    only by isolating it from `per_team`, as this test does by stubbing
+    qb_features_for_targets to report a per-team row for a team/week the schedule was
+    never asked about."""
+    weeks, depth, schedules = _fixture()
+    from nfl_game.ratings import starters as starters_module
+
+    fake_per_team = pd.DataFrame({"season": [2099], "week": [1], "team": ["ZZZ"]})
+    monkeypatch.setattr(
+        starters_module, "qb_features_for_targets", lambda *args, **kwargs: fake_per_team
+    )
+    out = starter_advisory(weeks, depth, schedules, _players(), [(2099, 1)], cutoff=None)
+    assert out.empty
+    assert list(out.columns) == ADVISORY_COLS

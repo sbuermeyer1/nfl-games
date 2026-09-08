@@ -66,10 +66,27 @@ def main(argv: list[str] | None = None) -> None:
     starters = None
     if not args.no_starters:
         try:
-            starters = NflverseStarterProvider().snapshot(args.season, args.week).rows
+            # This CLI gets one shot: it fetches, prints, exits, with no second
+            # request to fall back on the way the web dashboard has (see
+            # NflverseStarterProvider's timeout_seconds comment). A slow slate that
+            # still shows real quarterbacks beats a fast one that prints n/a, so use
+            # a generous explicit timeout here instead of the provider's web-tuned
+            # default.
+            starters = (
+                NflverseStarterProvider(timeout_seconds=60.0)
+                .snapshot(args.season, args.week)
+                .rows
+            )
         except StartersUnavailableError as exc:
             # Advisory only. A slate that prints without it is still correct; a slate
             # that refuses to print because a depth chart was unreachable is not.
+            print(f"warning: expected-starter advisory unavailable ({exc})")
+        except Exception as exc:  # noqa: BLE001 - presentation-only backstop; mirrors
+            # the suppression rationale in live_starters.py and web/service.py's
+            # identical backstop. self._executor.submit(...) inside the provider sits
+            # outside its own try and can raise RuntimeError or OSError under
+            # pressure -- either must still degrade to a missing advisory, never
+            # abort the CLI run.
             print(f"warning: expected-starter advisory unavailable ({exc})")
 
     slate = build_slate(

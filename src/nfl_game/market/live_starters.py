@@ -44,7 +44,7 @@ from nfl_game.data.nfl import (
     load_schedules,
 )
 from nfl_game.ratings.qb import normalize_depth_chart_history, qb_week_stats
-from nfl_game.ratings.starters import starter_advisory
+from nfl_game.ratings.starters import ADVISORY_COLS, starter_advisory
 
 
 class StartersUnavailableError(RuntimeError):
@@ -97,15 +97,27 @@ class NflverseStarterProvider:
         stats_loader=load_player_stats,
         players_loader=load_players,
         schedule_loader=load_schedules,
+        # Must return a timezone-aware datetime. A naive one reaches `_cutoff_for` in
+        # qb.py as the depth-chart cutoff, which raises there -- a failure this
+        # provider still degrades soft on, but from deep and unobviously inside qb.py
+        # rather than here.
         clock=lambda: datetime.now(UTC),
         ttl=timedelta(minutes=30),
-        # Measured cold load on a dev machine: depth charts (2025+2026) 4.85s, stats
-        # 2026 (404 path) 0.02s, stats 2025 1.46s, players 0.49s, schedules 0.16s --
-        # total ~6.98s. This is NOT the market provider's 5.0s: that provider loads
-        # one schedule feed, this one loads four, and depth-chart parsing alone is
-        # ~4.85s of that -- already over budget at 5.0. 15.0 clears the measured
-        # figure with headroom for a slower network or a cold Render dyno, while
-        # staying well under the original 20.0 that a review found could block the
+        # This is a WEB-REQUEST budget, not a figure meant to cover a cold load.
+        # Measured cold-start, three fresh processes on a dev machine: 12.32s,
+        # 11.51s, 11.36s (an earlier 6.98s figure summed individual loader calls
+        # inside one already-running process, which benefits from warm connections
+        # between them and understates a true cold start). 15.0 leaves only ~20%
+        # headroom over that on this machine, and the Render free dyno this deploys
+        # to has a shared CPU and slower network, so 15.0 will be exceeded there
+        # routinely. That's fine for the web dashboard specifically: a timeout here
+        # relies on the `future.done()` gate in `_stale_or_raise` below, which
+        # leaves the still-running future registered so the load keeps going in the
+        # background and the *next* request finds it cached -- a missed first
+        # request, not a failed one. It is NOT fine for a one-shot caller with no
+        # second request to fall back on; `scripts/slate.py` passes its own longer
+        # explicit timeout for that reason instead of relying on this default. Also
+        # stays well under the original 20.0 that a review found could block the
         # web dashboard's primary content (fixed instead by fetching this AFTER
         # `_bundle(...)` in web/service.py -- see that fix; do not revert it).
         timeout_seconds=15.0,
@@ -211,7 +223,8 @@ class NflverseStarterProvider:
     def _load_snapshot(self, key, now: datetime) -> StarterSnapshot:
         season, week = key
         # The prior season carries the "recent starter" for an early-season week; the
-        # full corpus is deliberately not loaded behind a live request. See the plan.
+        # full corpus is deliberately not loaded behind a live request. See the
+        # module docstring above.
         # Only `targets` below differs per week -- every one of these four feeds is
         # season-scoped, so it is loaded once per season and reused across weeks.
         seasons = [season - 1, season]
@@ -245,6 +258,14 @@ class NflverseStarterProvider:
             [(season, week)],
             cutoff=cutoff,
         )
+        # Cheap shape assertion: a malformed advisory frame (e.g. from a cached row
+        # source with a stale schema) would otherwise surface as a KeyError inside a
+        # request rather than degrading softly. Raising here puts it inside this
+        # method's own error path -- caught by snapshot()'s broad except -- so it
+        # degrades to a stale cache or a missing (n/a) advisory like any other
+        # provider failure, instead of 500ing the slate request.
+        if set(rows.columns) != set(ADVISORY_COLS):
+            raise ValueError(f"advisory rows have unexpected columns: {sorted(rows.columns)}")
         return StarterSnapshot(rows=rows.copy(deep=True), observed_at=observed_at)
 
     def _store_refresh(self, key, future, refreshed):

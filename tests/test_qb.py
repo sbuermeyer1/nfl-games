@@ -156,11 +156,13 @@ def _mixed_depth_normalized_source() -> pd.DataFrame:
 
 
 def _mixed_depth_raw_rows() -> pd.DataFrame:
-    """The raw-feed half of the mixed fixture below."""
+    """The raw-feed half of the mixed fixture below. Player identity is `gsis_id`,
+    matching the live 2025-era feed, which never populates `player_id` -- see
+    `_depth_history`'s docstring."""
     return pd.DataFrame(
         [
-            {"team": "BUF", "pos_abb": "QB", "pos_rank": 2.0, "player_id": "a-backup", "dt": "2025-09-20T12:00:00Z"},
-            {"team": "MIA", "pos_abb": "QB", "pos_rank": 1.0, "player_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
+            {"team": "BUF", "pos_abb": "QB", "pos_rank": 2.0, "gsis_id": "a-backup", "dt": "2025-09-20T12:00:00Z"},
+            {"team": "MIA", "pos_abb": "QB", "pos_rank": 1.0, "gsis_id": "qb-c", "dt": "2025-09-20T12:00:00Z"},
         ]
     )
 
@@ -193,7 +195,7 @@ def _future_starter_row() -> pd.DataFrame:
                 "team": "BUF",
                 "position": "QB",
                 "pos_rank": 1,
-                "player_id": "qb-z",
+                "gsis_id": "qb-z",
                 "dt": "2025-10-01T12:00:00Z",
             }
         ]
