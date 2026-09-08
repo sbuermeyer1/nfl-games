@@ -10,13 +10,16 @@ This is presentation, not a model input: nothing here reaches `FEATURE_COLS`, an
 failed refresh degrades to a missing or stale advisory, never to a failed prediction.
 
 Player stats are loaded for `[season - 1, season]` only, not the full 2016-onward
-corpus a research block would train on. `qb_epa_per_db` shrinks toward the league prior
-at 200 dropbacks (see `nfl_game.ratings.qb.QB_PRIOR_DROPBACKS`), so a quarterback with
-little recent history lands near league average rather than at a wild value from a thin
-sample. This makes `qb_change_epa` here NOT numerically identical to the Ridge-v2 C2
-research block's, which trains on the full history -- that divergence is an accepted
-trade-off for keeping a live request cheap, and advisory numbers must never be quoted
-as research numbers.
+corpus a research block would train on -- one request PER SEASON in that pair (see
+`_load_stats_per_season`), not a single combined request, because `nflreadpy` does not
+publish the current season's stats file until games have been played; an unpublished
+season is skipped rather than failing the whole load. `qb_epa_per_db` shrinks toward the
+league prior at 200 dropbacks (see `nfl_game.ratings.qb.QB_PRIOR_DROPBACKS`), so a
+quarterback with little recent history lands near league average rather than at a wild
+value from a thin sample. This makes `qb_change_epa` here NOT numerically identical to
+the Ridge-v2 C2 research block's, which trains on the full history -- that divergence is
+an accepted trade-off for keeping a live request cheap, and advisory numbers must never
+be quoted as research numbers.
 
 Those four season-scoped feeds (depth, stats, players, schedules) are cached ONCE PER
 SEASON, separately from the per-(season, week) snapshot cache above -- see
@@ -140,13 +143,41 @@ class NflverseStarterProvider:
             return cached
         frames = _SeasonFrames(
             depth=self._depth_loader(seasons, save=False),
-            stats=self._stats_loader(seasons, save=False),
+            stats=self._load_stats_per_season(seasons),
             players=self._players_loader(save=False),
             schedules=self._schedule_loader(seasons, save=False),
             loaded_at=now,
         )
         self._season_cache[season] = frames
         return frames
+
+    def _load_stats_per_season(self, seasons: list[int]) -> pd.DataFrame:
+        """Load player stats one season at a time, tolerating an unpublished season.
+
+        `nflreadpy` publishes `stats_player_week_YYYY.parquet` only once that
+        season's games have been played, so a single combined `[season - 1,
+        season]` request 404s for the whole preseason and week 1 -- exactly when a
+        starter advisory matters most (see the module docstring). Loading per
+        season and skipping only the one that 404s keeps the advisory alive on
+        whichever seasons DID publish.
+
+        Only `ConnectionError` -- the measured 404 shape -- is tolerated per
+        season. Anything else propagates so a genuine outage still fails rather
+        than silently serving a half-loaded frame. If every season fails, the last
+        `ConnectionError` propagates, which `snapshot()`'s existing handling turns
+        into a stale cache or `StartersUnavailableError`, same as any other feed
+        failure.
+        """
+        frames = []
+        error: ConnectionError | None = None
+        for season in seasons:
+            try:
+                frames.append(self._stats_loader([season], save=False))
+            except ConnectionError as exc:
+                error = exc
+        if not frames:
+            raise error
+        return pd.concat(frames, ignore_index=True)
 
     def _load_snapshot(self, key, now: datetime) -> StarterSnapshot:
         season, week = key

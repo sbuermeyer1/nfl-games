@@ -248,6 +248,119 @@ def test_stats_loader_is_asked_for_the_prior_and_current_season_only():
     assert seen == [[2024, 2025]]
 
 
+def _loaders_2026():
+    """Season-2026 week-1 schedule/depth paired with season-2025 stats as the prior
+    season's history -- the shape live data actually has for the whole preseason and
+    week 1, before stats_player_week_2026.parquet is published."""
+    schedules = pd.DataFrame(
+        {
+            "game_id": ["2026_01_CIN_BAL"],
+            "season": [2026],
+            "week": [1],
+            "home_team": ["BAL"],
+            "away_team": ["CIN"],
+            "kickoff_at": [pd.Timestamp("2026-09-10 17:00", tz="UTC")],
+        }
+    )
+    depth = pd.DataFrame(
+        {
+            "club_code": ["BAL", "CIN"],
+            "gsis_id": ["HUNT", "BURROW"],
+            "pos_abb": ["QB", "QB"],
+            "pos_rank": [1.0, 1.0],
+            "dt": pd.to_datetime(["2026-09-04 12:00"] * 2, utc=True),
+        }
+    )
+    _schedules_2025, _depth_2025, stats, players = _loaders()
+    return schedules, depth, stats, players
+
+
+def test_stats_load_tolerates_an_unpublished_current_season():
+    """Root-cause fix: nflreadpy only publishes stats_player_week_YYYY.parquet once
+    games are played, so a combined [season-1, season] request 404s for the whole
+    preseason and week 1 -- exactly when a starter advisory matters most. Loading
+    per season and skipping only the missing one must still produce a real advisory
+    from the prior season's rows."""
+    schedules, depth, stats, _players = _loaders_2026()
+
+    def per_season_stats(seasons, save=False):
+        if 2026 in seasons:
+            raise ConnectionError(
+                "Failed to download stats_player_week_2026.parquet: "
+                "404 Client Error: Not Found"
+            )
+        return stats
+
+    provider = _provider(
+        clock=lambda: datetime(2026, 9, 8, 13, tzinfo=UTC),
+        depth_loader=lambda seasons, save=False: depth,
+        stats_loader=per_season_stats,
+        schedule_loader=lambda seasons=None, save=False: schedules,
+    )
+    snap = provider.snapshot(2026, 1)
+    assert snap.rows.iloc[0]["home_qb"] == "Tyler Huntley"
+    assert snap.rows.iloc[0]["away_qb"] == "Joe Burrow"
+
+
+def test_stats_load_raises_when_no_season_is_available():
+    """Fail-soft must survive: if every season's stats load fails, the advisory is
+    still unavailable rather than silently serving depth charts with no history."""
+
+    def always_fails(seasons, save=False):
+        raise ConnectionError("404 Client Error: Not Found")
+
+    with pytest.raises(StartersUnavailableError):
+        _provider(stats_loader=always_fails).snapshot(2025, 5)
+
+
+def test_stats_load_uses_both_seasons_when_both_are_available():
+    """The direction most likely to regress unnoticed: tolerating a missing season
+    must not turn into silently dropping a season that IS present. Assert per-season
+    calls are actually made and both years' rows land in the combined frame."""
+    stats_2024 = pd.DataFrame(
+        {
+            "season": [2024],
+            "week": [10],
+            "team": ["BAL"],
+            "player_id": ["LAMAR"],
+            "position": ["QB"],
+            "season_type": ["REG"],
+            "attempts": [25.0],
+            "sacks_suffered": [1.0],
+            "passing_epa": [5.0],
+            "passing_cpoe": [2.0],
+            "passing_interceptions": [0.0],
+        }
+    )
+    stats_2025 = pd.DataFrame(
+        {
+            "season": [2025],
+            "week": [4],
+            "team": ["BAL"],
+            "player_id": ["LAMAR"],
+            "position": ["QB"],
+            "season_type": ["REG"],
+            "attempts": [30.0],
+            "sacks_suffered": [2.0],
+            "passing_epa": [12.0],
+            "passing_cpoe": [3.0],
+            "passing_interceptions": [0.0],
+        }
+    )
+    calls = []
+
+    def per_season(seasons, save=False):
+        calls.append(list(seasons))
+        return stats_2024 if seasons == [2024] else stats_2025
+
+    provider = _provider(stats_loader=per_season)
+    frames = provider._season_frames(2025, [2024, 2025], provider._clock())
+    assert calls == [[2024], [2025]], "the fix must load stats per season, not batched"
+    assert sorted(frames.stats["season"].unique().tolist()) == [2024, 2025], (
+        "both seasons' rows must survive once both are available"
+    )
+
+
 def test_cold_timeout_keeps_future_registered_for_later_consumption():
     started = Event()
     release = Event()
