@@ -1,0 +1,61 @@
+# Keeps the Render web service awake during the hours it is actually visited.
+#
+# WHY THIS EXISTS: `ashburn-nfl` runs on Render's FREE plan, which spins a service
+# down after ~15 minutes of inactivity. The first request after that returns 502
+# while the container restarts and re-imports pandas/sklearn -- measured at ~6.3s of
+# imports on a dev machine and slower on a shared dyno. The 502 is the platform
+# waking up, not an application fault; a reload 30-60s later succeeds.
+#
+# WHY IT IS WINDOWED AND NOT 24/7: Render's free tier allows 750 instance-hours per
+# month ACROSS ALL free services on the account, and there are two -- `ashburn-nfl`
+# here and `ashburn-draft` (the fantasy draft app, also `plan: free`). Keeping both
+# awake continuously would cost ~1,460 hours and exhaust the quota, taking BOTH down.
+# That is a worse failure than an occasional 502.
+#
+# This window -- Thu through Mon, 12:00-23:59 UTC, in season months -- is roughly
+# 260 instance-hours per month. It covers slate publication through Monday night and
+# leaves headroom for the draft app's August spike. A visit outside the window still
+# 502s once and works on reload, which is the accepted trade.
+#
+# If a third free service is ever added, or the draft app starts being kept awake,
+# RECHECK THE ARITHMETIC before widening this.
+
+name: Keep web service awake
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 10 minutes (under Render's ~15-minute idle timeout), 12:00-23:59 UTC,
+    # Thu(4) Fri(5) Sat(6) Sun(0) Mon(1), August-February.
+    - cron: "*/10 12-23 * 8-12,1-2 0,1,4,5,6"
+
+# A pinger needs no repository access at all. Deliberately not folded into
+# update-2026-tracker.yml, which holds `contents: write` and a data-writer
+# concurrency group.
+permissions: {}
+
+concurrency:
+  group: render-keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake the service
+        run: |
+          # /health is unauthenticated and does no model work -- enough to keep the
+          # dyno warm without touching the advisory's live feed loads.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 120 \
+            https://ashburn-nfl.onrender.com/health || echo "000")
+          echo "health -> $code"
+          # A 502 here is the service waking, which is exactly what this job is for,
+          # so it is reported and NOT treated as failure. A red X every ten minutes
+          # would train us to ignore this workflow, and then a real outage would be
+          # invisible too.
+          if [ "$code" = "200" ]; then
+            echo "awake"
+          else
+            echo "::notice::health returned $code (cold start or transient); the next ping should find it awake"
+          fi

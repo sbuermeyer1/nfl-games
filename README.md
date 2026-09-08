@@ -71,6 +71,22 @@ cached. **Result: FTN did not help** -- see CLAUDE.md.
 
 ## Web dashboard operations
 
+**A 502 on a cold visit is Render waking up, not a fault.** `ashburn-nfl` runs on
+Render's free plan, which spins a service down after roughly 15 minutes of inactivity.
+The next request returns 502 while the container restarts and re-imports pandas and
+scikit-learn -- about 6.3 seconds of imports measured on a dev machine, slower on a
+shared dyno. Reloading 30-60 seconds later succeeds. `.github/workflows/keep-web-awake.yml`
+pings `/health` every ten minutes Thursday through Monday, 12:00-23:59 UTC in season
+months, which covers slate publication through Monday night; a visit outside that window
+can still hit one 502.
+
+That window is deliberate rather than continuous. Render's free tier allows **750
+instance-hours per month across every free service on the account**, and there are two --
+this one and `ashburn-draft` in the fantasy repo. Keeping both awake around the clock
+would cost about 1,460 hours and exhaust the quota, taking down both. The current window
+costs roughly 260. **Recheck that arithmetic before widening the schedule or adding a
+third free service.**
+
 The dashboard serves three checked-in artifacts:
 `data/processed/game_features.parquet`, `data/processed/schedule_2026.parquet`, and
 `data/processed/tracker_ledger.parquet`. It reads all three at startup; there is no
