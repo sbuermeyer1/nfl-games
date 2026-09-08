@@ -42,10 +42,22 @@ def schedule_with_unpublished_game_above_the_floor():
 
 
 def write_artifacts(tmp_path):
+    """Stage the packaged artifacts with any LIVE ledger rows stripped.
+
+    These tests exercise an updater run against a ledger that has published nothing
+    yet, and assert the live rows their own run creates. Copying the shipped ledger
+    verbatim made that premise expire the moment the 2026 season began: the packaged
+    ledger now carries a live row for GAME_ID itself, published 2026-09-05, so the
+    updater correctly declines to re-publish and every assertion about a first
+    publication fails. Strip live rows here and keep the 1,359 historical rows, which
+    are the baseline the updater actually re-checks.
+    """
     feature_path = tmp_path / "game_features.parquet"
     ledger_path = tmp_path / "tracker_ledger.parquet"
     shutil.copyfile(PROJECT_ROOT / "data/processed/game_features.parquet", feature_path)
-    shutil.copyfile(PROJECT_ROOT / "data/processed/tracker_ledger.parquet", ledger_path)
+    ledger = pd.read_parquet(PROJECT_ROOT / "data/processed/tracker_ledger.parquet")
+    historical = ledger.loc[ledger["record_type"].ne("live")].reset_index(drop=True)
+    historical.to_parquet(ledger_path, index=False)
     return feature_path, ledger_path
 
 
@@ -245,6 +257,50 @@ def test_atomic_staging_failure_preserves_ledger_and_cleans_temporary_file(tmp_p
 
     assert ledger_path.read_bytes() == original
     assert list(tmp_path.glob(f".{ledger_path.name}.update-*.tmp")) == []
+
+
+def write_artifacts_keeping_live_rows(tmp_path):
+    """Stage the packaged artifacts UNFILTERED, live rows and all.
+
+    This is the state production is actually in once a season starts, and the state
+    write_artifacts deliberately strips. Nothing else exercises the CLI against it.
+    """
+    feature_path = tmp_path / "game_features.parquet"
+    ledger_path = tmp_path / "tracker_ledger.parquet"
+    shutil.copyfile(PROJECT_ROOT / "data/processed/game_features.parquet", feature_path)
+    shutil.copyfile(PROJECT_ROOT / "data/processed/tracker_ledger.parquet", ledger_path)
+    return feature_path, ledger_path
+
+
+def test_an_already_published_game_is_not_republished_or_repredicted(
+    tmp_path, monkeypatch, capsys
+):
+    """A game already live in the ledger must not be re-predicted or rewritten.
+
+    This pins the behaviour that four stale tests accidentally revealed when the 2026
+    season began: the shipped ledger gained a live row for GAME_ID, the updater
+    correctly declined to publish it a second time, and those tests failed because
+    they assumed a ledger that had published nothing. The updater was right; the
+    expectations were stale. Without this test, stripping live rows from the fixtures
+    would leave the CLI-level already-published path uncovered.
+    """
+    _, ledger_path = write_artifacts_keeping_live_rows(tmp_path)
+    seeded = pd.read_parquet(ledger_path)
+    live_before = seeded.loc[seeded["record_type"].eq("live")]
+    if live_before.empty:
+        pytest.skip("packaged ledger carries no live rows yet")
+    original = ledger_path.read_bytes()
+
+    result, calls = run_cli(tmp_path, "--dry-run", monkeypatch=monkeypatch)
+
+    assert result == 0
+    # No re-prediction: a published record is frozen, so there is nothing to recompute.
+    assert calls == []
+    assert ledger_path.read_bytes() == original
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["historical_records"] == 1359
+    assert summary["new_live_records"] == 0
+    assert summary["live_records"] == len(live_before)
 
 
 def test_dry_run_before_publication_window_handles_no_live_rows(tmp_path, monkeypatch, capsys):
