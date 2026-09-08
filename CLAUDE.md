@@ -290,6 +290,14 @@ Do not introduce reverse dependencies. Package ownership is strict:
   full corpus — advisory numbers must never be quoted as research numbers.
   `scripts/slate.py --no-starters` skips the live fetch entirely. The advisory is never
   written to a packaged artifact and never reaches the tracker.
+  The advisory needs prior-season player stats; the current season's stats file does not
+  exist until games have been played, so stats load per season and an unpublished season
+  is skipped rather than failing the whole load — see `_load_stats_per_season`.
+  Week 1 compares against the previous season's last game. Many teams rest starters in
+  week 18, so week-1 `qb_watch` fires far more often than the 22.2% historical base rate
+  (measured: 11 of 16 games for 2026 week 1) and `qb_change_epa` is measured against that
+  finale's starter, not the team's real QB1. This is correct per spec and self-corrects
+  from week 2 — read week-1 numbers accordingly.
 - `tracking/` — tracker artifacts are built offline and read only at runtime. Only Ridge
   `ridge-v1` is official. Historical and live records must never aggregate together;
   thresholds are fixed at 2 points for qualified picks and cumulative 5/10/15-point
