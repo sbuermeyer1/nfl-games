@@ -39,6 +39,7 @@ PAGE = """<!doctype html>
   th, td { border-bottom: 1px solid #ddd; padding: .5rem; text-align: right; }
   th:first-child, td:first-child { text-align: left; }
   .edge { font-weight: 700; color: #087443; }
+  .qb-watch { background: #fff6e0; }
   .note { color: #555; font-size: .9rem; }
 </style>
 <main>
@@ -58,6 +59,7 @@ PAGE = """<!doctype html>
   </div>
   <p id="message" role="status"></p>
   <p id="market-message" role="status" aria-live="polite"></p>
+  <p id="starter-message" role="status" aria-live="polite"></p>
   <div class="table-wrap"><table id="results"></table></div>
   <p class="note">Spreads are home-team margins. An edge flag shows model/market
   disagreement and is not betting advice.</p>
@@ -71,6 +73,7 @@ const runButton = document.getElementById('run');
 const downloadButton = document.getElementById('download');
 const message = document.getElementById('message');
 const marketMessage = document.getElementById('market-message');
+const starterMessage = document.getElementById('starter-message');
 const results = document.getElementById('results');
 let latestWeekRequest = 0;
 let latestSlateRequest = 0;
@@ -120,6 +123,23 @@ function formatted(value, kind) {
   return number.toFixed(1);
 }
 
+function qbCell(game) {
+  // Mirrors market/compare.py::_qb_cell exactly -- a reader comparing the CLI and
+  // the dashboard for the same game must see the same thing. In particular,
+  // qb_watch === 0 with qb_inferred === 1 (no chart published yet) must render
+  // "unconfirmed", not the same blank cell as a genuine, chart-confirmed no-change.
+  if (game.qb_watch === null || game.qb_watch === undefined) return 'n/a';
+  const inferred = game.qb_inferred === 1;
+  if (game.qb_watch === 0) return inferred ? 'unconfirmed' : '';
+  const parts = [];
+  for (const [name, delta] of [[game.home_qb, game.qb_change_epa_home],
+                               [game.away_qb, game.qb_change_epa_away]]) {
+    if (delta === null || delta === undefined || delta === 0) continue;
+    parts.push(`${name === null ? 'unknown' : name} ${delta > 0 ? '+' : ''}${delta.toFixed(2)}`);
+  }
+  return (parts.join('; ') || 'change') + (inferred ? ' (inferred)' : '');
+}
+
 function renderMarket(market) {
   if (!market) {
     marketMessage.textContent = '';
@@ -129,6 +149,20 @@ function renderMarket(market) {
   marketMessage.textContent = market.stale
     ? `Warning: market lines are stale. Last observed ${observedAt}`
     : `Lines updated ${observedAt}`;
+}
+
+function renderStarters(starters) {
+  // Mirrors renderMarket: a stale starter snapshot is not bounded by a short TTL --
+  // the provider keeps returning it, marked stale, for as long as refreshes keep
+  // failing -- and a depth chart's whole value is timeliness.
+  if (!starters) {
+    starterMessage.textContent = '';
+    return;
+  }
+  const observedAt = starters.observed_at || '\u2014';
+  starterMessage.textContent = starters.stale
+    ? `Warning: starter advisory is stale. Last observed ${observedAt}`
+    : '';
 }
 
 function renderGames(games) {
@@ -143,6 +177,7 @@ function renderGames(games) {
     ['Gap', game => formatted(game.total_gap, 'signed')],
     ['Over%', game => formatted(game.over_prob, 'probability')],
     ['Edge', game => game.edge_flag === 1 ? '*' : ''],
+    ['QB', game => qbCell(game)],
   ];
   results.replaceChildren();
   const header = document.createElement('tr');
@@ -159,7 +194,10 @@ function renderGames(games) {
       cell.textContent = value(game);
       row.appendChild(cell);
     }
-    if (game.edge_flag === 1) row.className = 'edge';
+    const classes = [];
+    if (game.edge_flag === 1) classes.push('edge');
+    if (game.qb_watch === 1) classes.push('qb-watch');
+    if (classes.length) row.className = classes.join(' ');
     results.appendChild(row);
   }
 }
@@ -170,6 +208,7 @@ function invalidateSlate(runAvailable = true) {
   results.replaceChildren();
   message.textContent = '';
   marketMessage.textContent = '';
+  starterMessage.textContent = '';
   downloadButton.disabled = true;
   runButton.disabled = !runAvailable;
 }
@@ -197,11 +236,13 @@ async function runSlate() {
   runButton.disabled = true;
   message.textContent = 'Loading...';
   marketMessage.textContent = '';
+  starterMessage.textContent = '';
   try {
     const body = await jsonOrError(`/api/slate?${query}`);
     if (request !== latestSlateRequest || query !== queryString()) return;
     renderGames(body.games);
     renderMarket(body.market);
+    renderStarters(body.starters);
     renderedSlateQuery = query;
     downloadButton.disabled = false;
     message.textContent = `${body.games.length} games`;
@@ -209,6 +250,7 @@ async function runSlate() {
     if (request !== latestSlateRequest || query !== queryString()) return;
     results.replaceChildren();
     marketMessage.textContent = '';
+    starterMessage.textContent = '';
     message.textContent = error.message;
   } finally {
     if (request === latestSlateRequest && query === queryString()) {

@@ -93,7 +93,7 @@ def test_load_app_wraps_parquet_read_failure(tmp_path, monkeypatch):
     dataset.write_bytes(b"not parquet")
     tracker.touch()
 
-    def fail(path, packaged_schedule=None, market_provider=None):
+    def fail(path, packaged_schedule=None, market_provider=None, starter_provider=None):
         raise ValueError("invalid parquet footer")
 
     monkeypatch.setattr("nfl_game.web.runtime.SlateService.from_parquet", fail)
@@ -248,6 +248,34 @@ def test_load_app_rejects_schedule_without_2026_regular_season_games(tmp_path):
 
     with pytest.raises(RuntimeConfigError, match="cannot load packaged 2026 schedule"):
         load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
+
+
+def test_load_app_wires_starter_provider(tmp_path, monkeypatch):
+    """Catch the deployed app losing the QB starter advisory because no provider is wired."""
+    dataset = write_feature_artifact(tmp_path)
+    tracker = write_tracker_artifact(tmp_path)
+    schedule = write_schedule_artifact(tmp_path)
+
+    from nfl_game.market.live_starters import NflverseStarterProvider
+    from nfl_game.web.service import SlateService
+
+    original_from_parquet = SlateService.from_parquet
+    captured = {}
+
+    def capture(path, packaged_schedule=None, market_provider=None, starter_provider=None):
+        captured["starter_provider"] = starter_provider
+        return original_from_parquet(
+            path,
+            packaged_schedule=packaged_schedule,
+            market_provider=market_provider,
+            starter_provider=starter_provider,
+        )
+
+    monkeypatch.setattr("nfl_game.web.runtime.SlateService.from_parquet", capture)
+
+    load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
+
+    assert isinstance(captured["starter_provider"], NflverseStarterProvider)
 
 
 def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):

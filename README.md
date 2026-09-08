@@ -121,6 +121,12 @@ to the packaged schedule; after a successful request, an upstream error or timeo
 returns the last snapshot marked stale. Spread and total availability are independent:
 a missing value stays visibly missing and never changes a model prediction.
 
+The `QB` column shows an expected-starter advisory, refreshed independently of the
+market lines from a live depth-chart feed (30-minute cache). It reads `n/a` when that
+feed is unreachable; this is expected, not a fault, and it never affects the model
+spread/total or the edge marker. `scripts/slate.py --no-starters` skips the live fetch
+entirely and prints the slate without the column's data.
+
 The browser uses these read-only endpoints:
 
 - `GET /health` returns `{"ok": true}` and is public; it is available for an optional configured HTTP health check.

@@ -1,7 +1,17 @@
-"""Leak-free quarterback context and expected-starter features."""
+"""Leak-free quarterback context and expected-starter features.
+
+Leak-freedom holds for `cutoff=None` (kickoff itself) and `cutoff=Timedelta` (kickoff
+minus a fixed lead, per game): both resolve to an instant at or before that game's own
+kickoff. An absolute `cutoff=Timestamp` is a live-advisory affordance -- one instant
+shared by every game in the request, which can be LATER than a given game's kickoff
+once that game has been played -- and must never be used in a feature build; only
+`nfl_game.market.live_starters` passes one, for a live overlay that is joined onto the
+slate after prediction and never reaches `FEATURE_COLS`.
+"""
 
 from __future__ import annotations
 
+from typing import TypeAlias
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -13,6 +23,8 @@ from nfl_game.ratings.depth import (
     group_by_team,
     normalize_depth_charts,
 )
+
+CutoffPolicy: TypeAlias = "pd.Timestamp | pd.Timedelta | None"
 
 QB_FEATURE_COLS = (
     "qb_epa_per_db",
@@ -98,7 +110,31 @@ def _prior(rows: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
     return rows[(rows["season"] < season) | ((rows["season"] == season) & (rows["week"] < week))]
 
 
-def _targets_from_schedule(schedules: pd.DataFrame, targets: list[tuple[int, int]]) -> pd.DataFrame:
+def _cutoff_for(kickoff: pd.Series, cutoff: CutoffPolicy) -> pd.Series:
+    """Resolve the depth-chart cutoff for each game.
+
+    `None` is kickoff itself -- the original behavior, kept verbatim so the Ridge-v2
+    research output stays reproducible. A `Timedelta` is kickoff minus that lead, per
+    game, which is what a published pick actually has. A `Timestamp` is one absolute
+    instant for every game, which is what a live advisory has.
+
+    The lead is subtracted from EACH GAME's own kickoff, never from the week's first
+    kickoff. Anchoring to the week is how a cache named for a five-day lead came to have
+    a 7.51-day mean.
+    """
+    if cutoff is None:
+        return kickoff
+    if isinstance(cutoff, pd.Timedelta):
+        return kickoff - cutoff
+    stamp = pd.Timestamp(cutoff)
+    if stamp.tzinfo is None:
+        raise ValueError("an absolute depth-chart cutoff must be timezone-aware")
+    return pd.Series(stamp, index=kickoff.index)
+
+
+def _targets_from_schedule(
+    schedules: pd.DataFrame, targets: list[tuple[int, int]], cutoff: CutoffPolicy = None
+) -> pd.DataFrame:
     requested = pd.DataFrame(sorted(set(targets)), columns=["season", "week"])
     games = schedules.merge(requested, on=["season", "week"], how="inner")
     pieces = []
@@ -109,12 +145,12 @@ def _targets_from_schedule(schedules: pd.DataFrame, targets: list[tuple[int, int
         return pd.DataFrame(columns=["season", "week", "team", "cutoff"])
     out = pd.concat(pieces, ignore_index=True).drop_duplicates(["season", "week", "team"])
     if "kickoff_at" in out:
-        cutoff = pd.to_datetime(out["kickoff_at"], utc=True, errors="coerce")
+        cutoff_series = pd.to_datetime(out["kickoff_at"], utc=True, errors="coerce")
     else:
         text = out.get("gameday", "").astype(str) + " " + out.get("gametime", "").astype(str)
-        cutoff = pd.to_datetime(text, errors="coerce")
-        cutoff = cutoff.dt.tz_localize(ZoneInfo("America/New_York"), ambiguous="raise", nonexistent="raise").dt.tz_convert("UTC")
-    out["cutoff"] = cutoff
+        cutoff_series = pd.to_datetime(text, errors="coerce")
+        cutoff_series = cutoff_series.dt.tz_localize(ZoneInfo("America/New_York"), ambiguous="raise", nonexistent="raise").dt.tz_convert("UTC")
+    out["cutoff"] = _cutoff_for(cutoff_series, cutoff)
     return out[["season", "week", "team", "cutoff"]].sort_values(["season", "week", "team"])
 
 
@@ -143,10 +179,32 @@ def qb_features_for_targets(
     depth_history: pd.DataFrame,
     schedules: pd.DataFrame,
     targets: list[tuple[int, int]],
+    cutoff: CutoffPolicy = None,
 ) -> pd.DataFrame:
-    """Build as-of QB features for both teams in each requested scheduled game."""
-    games = _targets_from_schedule(schedules, targets)
-    columns = ["season", "week", "team", "expected_starter_id", *QB_FEATURE_COLS]
+    """Build as-of QB features for both teams in each requested scheduled game.
+
+    `cutoff` (see `CutoffPolicy` and `_cutoff_for`) controls how far into a depth
+    chart's history each game may look:
+    - `None` (default): the cutoff is that game's own kickoff. This is the original
+      behavior, kept byte-identical so the Ridge-v2 research output stays
+      reproducible -- do not change its numeric output or this default.
+    - `pd.Timedelta`: kickoff minus that lead, per game -- what a published pick
+      actually had available.
+    - `pd.Timestamp` (must be timezone-aware): one absolute instant shared by every
+      game in `targets`. This is a live-advisory affordance ONLY -- it is how
+      `nfl_game.market.live_starters` asks "what does the chart look like right now"
+      -- and must never be used in a feature build, since it can be later than a
+      played game's own kickoff.
+    """
+    games = _targets_from_schedule(schedules, targets, cutoff)
+    columns = [
+        "season",
+        "week",
+        "team",
+        "expected_starter_id",
+        "recent_starter_id",
+        *QB_FEATURE_COLS,
+    ]
     if games.empty:
         return pd.DataFrame(columns=columns)
     weeks = qb_weeks.copy() if not qb_weeks.empty else pd.DataFrame(columns=qb_week_stats(pd.DataFrame()).columns)
@@ -181,6 +239,7 @@ def qb_features_for_targets(
         results.append(
             {
                 "season": int(row.season), "week": int(row.week), "team": row.team, "expected_starter_id": expected,
+                "recent_starter_id": recent_starter,
                 "qb_epa_per_db": (player_rates["epa"] * player_db + league["epa"] * QB_PRIOR_DROPBACKS) / weight,
                 "qb_cpoe": (player_rates["cpoe"] * player_db + league["cpoe"] * QB_PRIOR_DROPBACKS) / weight,
                 "qb_sack_rate": (player_rates["sack"] * player_db + league["sack"] * QB_PRIOR_DROPBACKS) / weight,

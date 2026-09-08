@@ -6,12 +6,13 @@ import pandas as pd
 
 from nfl_game.backtest import walk_forward
 from nfl_game.market.compare import build_slate, slate_markdown
+from nfl_game.market.live_starters import NflverseStarterProvider, StartersUnavailableError
 from nfl_game.model.calibrate import Calibrator
 from nfl_game.model.predict import DEFAULT_ALPHA, DegenerateFeatureError, GameModel
 from nfl_game.paths import PROCESSED_DIR
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--season", type=int, required=True)
     ap.add_argument("--week", type=int, required=True)
@@ -23,7 +24,16 @@ def main() -> None:
         help="ridge penalty strength; ignored by --estimator gbm, which warns if you set it",
     )
     ap.add_argument("--edge-threshold", type=float, default=2.0)
-    args = ap.parse_args()
+    ap.add_argument(
+        "--no-starters",
+        action="store_true",
+        help="skip the expected-starter advisory (it needs a live depth-chart fetch)",
+    )
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parser().parse_args(argv)
 
     feats = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
 
@@ -53,7 +63,18 @@ def main() -> None:
     preds = model.predict(target)
     probs = calibrator.predict(target.merge(preds, on="game_id"))
 
-    slate = build_slate(target, preds, probs, edge_threshold=args.edge_threshold)
+    starters = None
+    if not args.no_starters:
+        try:
+            starters = NflverseStarterProvider().snapshot(args.season, args.week).rows
+        except StartersUnavailableError as exc:
+            # Advisory only. A slate that prints without it is still correct; a slate
+            # that refuses to print because a depth chart was unreachable is not.
+            print(f"warning: expected-starter advisory unavailable ({exc})")
+
+    slate = build_slate(
+        target, preds, probs, edge_threshold=args.edge_threshold, starters=starters
+    )
 
     csv_path = PROCESSED_DIR / f"slate_{args.season}_wk{args.week:02d}.csv"
     md_path = PROCESSED_DIR / f"slate_{args.season}_wk{args.week:02d}.md"

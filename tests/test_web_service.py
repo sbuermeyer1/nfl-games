@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from nfl_game.market.live import MarketSnapshot, MarketUnavailableError
+from nfl_game.market.live_starters import StarterSnapshot, StartersUnavailableError
 from nfl_game.model.features import FEATURE_COLS
 from nfl_game.model.predict import DEFAULT_ALPHA
 from nfl_game.web.service import (
@@ -297,13 +298,14 @@ def fake_fitted_service(monkeypatch, spread_line=2.5, total_line=44.5):
     return service, calls
 
 
-def fake_fitted_2026_service(monkeypatch, provider=None):
+def fake_fitted_2026_service(monkeypatch, provider=None, starter_provider=None):
     _, calls = fake_fitted_service(monkeypatch)
     service = SlateService(
         feature_rows_with_2026_weeks(),
         packaged_schedule=packaged_schedule(),
         market_provider=provider,
         clock=lambda: FIXED_NOW,
+        starter_provider=starter_provider,
     )
     return service, calls
 
@@ -593,3 +595,93 @@ def test_schedule_records_uses_one_snapshot_and_json_safe_lines(monkeypatch):
     assert body["season"] == 2026
     assert body["games"][0]["spread_line"] is None
     assert body["market"]["source"] == "nflverse"
+
+
+def _advisory_rows(game_id="2026_01_AAA_BBB"):
+    return pd.DataFrame(
+        {
+            "game_id": pd.Series([game_id], dtype="string"),
+            "home_qb": pd.Series(["Tyler Huntley"], dtype="string"),
+            "away_qb": pd.Series(["Joe Burrow"], dtype="string"),
+            "qb_change_epa_home": [-0.31],
+            "qb_change_epa_away": [0.0],
+            "qb_watch": pd.Series([1], dtype="Int64"),
+            "qb_inferred": pd.Series([0], dtype="Int64"),
+        }
+    )
+
+
+class _StubStarterProvider:
+    def __init__(self, rows=None):
+        self._rows = _advisory_rows() if rows is None else rows
+
+    def snapshot(self, season, week):
+        return StarterSnapshot(
+            rows=self._rows,
+            observed_at=datetime(2026, 9, 8, 12, tzinfo=UTC),
+        )
+
+
+class _BrokenStarterProvider:
+    def snapshot(self, season, week):
+        raise StartersUnavailableError("down")
+
+
+def test_payload_carries_starter_metadata_when_a_provider_is_configured(monkeypatch):
+    service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=_StubStarterProvider())
+    payload = service.payload(2026, 1, "ridge", 2.0)
+    assert payload["starters"]["stale"] is False
+    assert payload["games"][0]["qb_watch"] == 1
+    assert payload["games"][0]["home_qb"] == "Tyler Huntley"
+
+
+def test_payload_starters_key_is_none_without_a_provider(monkeypatch):
+    service, _ = fake_fitted_2026_service(monkeypatch)
+    payload = service.payload(2026, 1, "ridge", 2.0)
+    assert payload["starters"] is None
+    assert payload["games"][0]["qb_watch"] is None
+
+
+def test_an_unavailable_starter_feed_still_returns_a_slate(monkeypatch):
+    service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=_BrokenStarterProvider())
+    payload = service.payload(2026, 1, "ridge", 2.0)
+    assert payload["games"]
+    assert payload["starters"] is None
+    assert payload["games"][0]["qb_watch"] is None
+
+
+def test_the_advisory_never_moves_a_web_prediction(monkeypatch):
+    without_service, _ = fake_fitted_2026_service(monkeypatch)
+    without = without_service.payload(2026, 1, "ridge", 2.0)["games"][0]
+
+    with_service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=_StubStarterProvider())
+    with_advisory = with_service.payload(2026, 1, "ridge", 2.0)["games"][0]
+
+    for key in ("model_spread", "model_total", "spread_gap", "total_gap", "edge_flag"):
+        assert without[key] == with_advisory[key], key
+
+
+def test_starter_fetch_happens_after_the_model_bundle_is_fit(monkeypatch):
+    """I5(a): scripts/slate.py correctly fetches starters AFTER `probs`; service.py
+    fetched them BEFORE `self._bundle(...)`, with a 20s timeout (four times the
+    market provider's 5.0) -- so a presentation-only column could add real latency
+    ahead of the model finishing its own fit/predict work."""
+    order = []
+
+    class RecordingStarterProvider:
+        def snapshot(self, season, week):
+            order.append("starters")
+            return StarterSnapshot(rows=_advisory_rows(), observed_at=datetime(2026, 9, 8, 12, tzinfo=UTC))
+
+    service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=RecordingStarterProvider())
+    original_fit_bundle = service._fit_bundle
+
+    def recording_fit_bundle(season, estimator):
+        order.append("bundle")
+        return original_fit_bundle(season, estimator)
+
+    monkeypatch.setattr(service, "_fit_bundle", recording_fit_bundle)
+
+    service.payload(2026, 1, "ridge", 2.0)
+
+    assert order == ["bundle", "starters"]

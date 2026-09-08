@@ -213,13 +213,15 @@ class Element {
 }
 
 const nodes = Object.fromEntries(
-  ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'market-message', 'results']
+  ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'market-message',
+   'starter-message', 'results']
     .map(id => [id, new Element(id === 'edge' ? 'input' : 'select')])
 );
 nodes.run.tagName = 'button';
 nodes.download.tagName = 'button';
 nodes.message.tagName = 'p';
 nodes['market-message'].tagName = 'p';
+nodes['starter-message'].tagName = 'p';
 nodes.results.tagName = 'table';
 
 globalThis.document = {
@@ -288,6 +290,7 @@ eval(input.script);
     location: window.location,
     message: nodes.message.textContent,
     marketMessage: nodes['market-message'].textContent,
+    starterMessage: nodes['starter-message'].textContent,
     rows,
     season: { value: nodes.season.value, options: options('season') },
     week: { value: nodes.week.value, options: options('week') },
@@ -380,9 +383,92 @@ def test_dashboard_initializes_selectors_and_renders_safe_game_values():
             "\N{EM DASH}",
             "\N{EM DASH}",
             "*",
+            "n/a",
         ],
     }
     assert state["marketMessage"] == "Lines updated 2026-09-01T12:00:00+00:00"
+
+
+def test_dashboard_renders_qb_advisory_cell_and_row_class():
+    """Catch a QB advisory cell that collapses null (unavailable) into 0 (no change)."""
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+    responses[slate_url]["body"]["games"] = [
+        {
+            **dashboard_game("AAA", "BBB"),
+            "qb_watch": 1,
+            "home_qb": "Tyler Huntley",
+            "away_qb": "Joe Burrow",
+            "qb_change_epa_home": -0.31,
+            "qb_change_epa_away": 0.0,
+            "qb_inferred": 0,
+        },
+        {
+            **dashboard_game("CCC", "DDD"),
+            "qb_watch": 0,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": None,
+            "qb_change_epa_away": None,
+            "qb_inferred": None,
+        },
+        {
+            **dashboard_game("KKK", "LLL"),
+            "qb_watch": 0,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": None,
+            "qb_change_epa_away": None,
+            "qb_inferred": 1,
+        },
+        {
+            **dashboard_game("EEE", "FFF"),
+            "qb_watch": None,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": None,
+            "qb_change_epa_away": None,
+            "qb_inferred": None,
+        },
+        {
+            **dashboard_game("GGG", "HHH"),
+            "qb_watch": 1,
+            "home_qb": None,
+            "away_qb": None,
+            "qb_change_epa_home": 0.0,
+            "qb_change_epa_away": 0.0,
+            "qb_inferred": 1,
+        },
+        {
+            **dashboard_game("III", "JJJ"),
+            "edge_flag": 1,
+            "qb_watch": 1,
+            "home_qb": "New Starter",
+            "away_qb": None,
+            "qb_change_epa_home": 1.5,
+            "qb_change_epa_away": None,
+            "qb_inferred": 0,
+        },
+    ]
+
+    state = dashboard_state(client(), responses, initialize_actions())
+
+    rows = state["rows"][1:]
+    assert rows[0]["cells"][-1] == "Tyler Huntley -0.31"
+    assert rows[0]["className"] == "qb-watch"
+    assert rows[1]["cells"][-1] == ""
+    assert rows[1]["className"] == ""
+    # I1: no chart has published yet (qb_watch=0, qb_inferred=1) must read differently
+    # from a genuine no-change (qb_watch=0, qb_inferred=0, asserted on rows[1] above) --
+    # both used to render as the same blank cell.
+    assert rows[2]["cells"][-1] == "unconfirmed"
+    assert rows[2]["className"] == ""
+    assert rows[3]["cells"][-1] == "n/a"
+    assert rows[3]["className"] == ""
+    assert rows[4]["cells"][-1] == "change (inferred)"
+    assert rows[4]["className"] == "qb-watch"
+    assert rows[5]["cells"][-1] == "New Starter +1.50"
+    assert rows[5]["className"] == "edge qb-watch"
 
 
 def test_dashboard_warns_when_market_data_is_stale():
@@ -399,6 +485,42 @@ def test_dashboard_warns_when_market_data_is_stale():
 
     assert "stale" in state["marketMessage"].lower()
     assert "2026-09-01T12:00:00+00:00" in state["marketMessage"]
+
+
+def test_dashboard_warns_when_the_starter_advisory_is_stale():
+    """I3: a stale starter snapshot is not bounded by the provider's TTL the way a
+    stuck market refresh is bounded by a short one -- _stale_or_raise keeps returning
+    the cached snapshot for as long as refreshes keep failing. A depth chart's whole
+    value is timeliness, so payload().starters must actually be rendered, the way
+    renderMarket already renders payload().market."""
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+    responses[slate_url]["body"]["starters"] = {
+        "source": "nflverse",
+        "observed_at": "2026-09-01T09:00:00+00:00",
+        "stale": True,
+    }
+
+    state = dashboard_state(client(), responses, initialize_actions())
+
+    assert "stale" in state["starterMessage"].lower()
+    assert "2026-09-01T09:00:00+00:00" in state["starterMessage"]
+
+
+def test_dashboard_shows_no_starter_warning_when_the_advisory_is_fresh_or_absent():
+    responses = standard_responses()
+    slate_url = "/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"
+
+    fresh = dashboard_state(client(), responses, initialize_actions())
+    assert fresh["starterMessage"] == ""
+
+    responses[slate_url]["body"]["starters"] = {
+        "source": "nflverse",
+        "observed_at": "2026-09-01T12:00:00+00:00",
+        "stale": False,
+    }
+    not_stale = dashboard_state(client(), responses, initialize_actions())
+    assert "stale" not in not_stale["starterMessage"].lower()
 
 
 def test_dashboard_loading_message_is_ascii_safe():

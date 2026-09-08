@@ -1,6 +1,6 @@
 import pandas as pd
 
-from nfl_game.market.compare import SLATE_COLS, build_slate, slate_markdown
+from nfl_game.market.compare import SLATE_COLS, _qb_cell, build_slate, slate_markdown
 
 
 def _inputs():
@@ -251,3 +251,153 @@ def test_edge_flag_is_driven_by_spread_gap_not_total_gap():
     out = build_slate(*_inputs_edge_cases()).set_index("game_id")
     assert out.loc["g_total_only", "edge_flag"] == 0
     assert out.loc["g_total_only", "total_gap"] == 8.0
+
+
+def _advisory(game_id, watch=1, inferred=0):
+    return pd.DataFrame(
+        {
+            "game_id": pd.Series([game_id], dtype="string"),
+            "home_qb": pd.Series(["Tyler Huntley"], dtype="string"),
+            "away_qb": pd.Series(["Joe Burrow"], dtype="string"),
+            "qb_change_epa_home": [-0.31],
+            "qb_change_epa_away": [0.0],
+            "qb_watch": pd.Series([watch], dtype="Int64"),
+            "qb_inferred": pd.Series([inferred], dtype="Int64"),
+        }
+    )
+
+
+def test_slate_without_starters_has_null_advisory_columns():
+    out = build_slate(*_inputs())
+    assert list(out.columns) == SLATE_COLS
+    assert out["qb_watch"].isna().all()
+    assert out["home_qb"].isna().all()
+
+
+def test_the_overlay_never_moves_a_prediction_or_a_flag():
+    feats, preds, probs = _inputs()
+    without = build_slate(feats, preds, probs)
+    game_id = without["game_id"].iloc[0]
+    with_advisory = build_slate(feats, preds, probs, starters=_advisory(game_id))
+    for column in ("model_spread", "model_total", "spread_gap", "total_gap", "edge_flag"):
+        pd.testing.assert_series_equal(
+            without[column], with_advisory[column], check_exact=True
+        )
+
+
+def test_the_overlay_attaches_to_the_right_game():
+    feats, preds, probs = _inputs()
+    game_id = build_slate(feats, preds, probs)["game_id"].iloc[0]
+    out = build_slate(feats, preds, probs, starters=_advisory(game_id)).set_index("game_id")
+    assert out.loc[game_id, "home_qb"] == "Tyler Huntley"
+    assert out.loc[game_id, "qb_watch"] == 1
+
+
+def test_an_advisory_for_an_unknown_game_leaves_every_row_null():
+    feats, preds, probs = _inputs()
+    out = build_slate(feats, preds, probs, starters=_advisory("2099_01_XXX_YYY"))
+    assert out["qb_watch"].isna().all()
+
+
+def test_markdown_renders_the_qb_column_and_marks_a_watch():
+    feats, preds, probs = _inputs()
+    game_id = build_slate(feats, preds, probs)["game_id"].iloc[0]
+    md = slate_markdown(build_slate(feats, preds, probs, starters=_advisory(game_id)))
+    assert "| QB |" in md
+    assert "Tyler Huntley" in md
+    assert "-0.31" in md
+
+
+def test_markdown_renders_a_missing_advisory_as_not_available():
+    md = slate_markdown(build_slate(*_inputs()))
+    assert "| QB |" in md
+    assert "nan" not in md.lower()
+
+
+def test_game_id_dtype_is_identical_with_and_without_starters():
+    # `game_id` is a pre-existing column, not one of the six advisory columns, and its
+    # dtype is not part of this feature's contract. The cast to pandas StringDtype in
+    # build_slate is unconditional (it runs before the `if starters is not None` check,
+    # not inside it), so EVERY caller's game_id is StringDtype now, whether or not
+    # `starters` is passed -- this is not "dormant" (unreached code): both
+    # scripts/slate.py and web/service.py already call build_slate with a `starters`
+    # keyword (sometimes None) on every real request. What the cast actually is is
+    # INERT at the boundaries this slate feeds -- JSON, CSV and the tracker all
+    # round-trip StringDtype and plain object/str identically -- which is a narrower,
+    # weaker claim than "unreachable." The dtype must still not depend on whether
+    # `starters` was supplied, so this pin stays as a regression guard regardless.
+    feats, preds, probs = _inputs()
+    without = build_slate(feats, preds, probs)
+    game_id = without["game_id"].iloc[0]
+    with_advisory = build_slate(feats, preds, probs, starters=_advisory(game_id))
+    assert without["game_id"].dtype == with_advisory["game_id"].dtype
+
+
+def test_qb_cell_handles_null_qb_inferred_with_qb_watch_one():
+    # qb_inferred and qb_watch are both plain max()-of-two-sides derived from the same
+    # per-team advisory rows in ratings/starters.py today, so they can't disagree in
+    # production -- but _qb_cell
+    # takes an arbitrary row with no such guarantee. If qb_watch == 1 while qb_inferred
+    # is null, `row.qb_inferred == 1` evaluates to `pd.NA`, and `"..." if pd.NA else
+    # "..."` raises TypeError: boolean value of NA is ambiguous. _qb_cell must treat a
+    # null qb_inferred as "not inferred" (no suffix) rather than raising.
+    row = pd.Series(
+        {
+            "home_qb": "Tyler Huntley",
+            "away_qb": "Joe Burrow",
+            "qb_change_epa_home": -0.31,
+            "qb_change_epa_away": 0.0,
+            "qb_watch": pd.array([1], dtype="Int64")[0],
+            "qb_inferred": pd.NA,
+        }
+    )
+    assert _qb_cell(row) == "Tyler Huntley -0.31"
+
+
+def test_qb_cell_renders_unconfirmed_when_no_chart_has_published_yet():
+    # I1: an unpublished depth chart (qb_watch=0, qb_inferred=1 -- the starter shown is
+    # last week's, not read from a chart) must not render identically to a genuine
+    # no-change (qb_watch=0, qb_inferred=0). Both currently return "" from _qb_cell's
+    # early `if row.qb_watch != 1: return ""`, which is indistinguishable from "no
+    # change" to a reader scanning the slate before charts publish.
+    row = pd.Series(
+        {
+            "home_qb": pd.NA,
+            "away_qb": "Lamar Jackson",
+            "qb_change_epa_home": float("nan"),
+            "qb_change_epa_away": 0.0,
+            "qb_watch": pd.array([0], dtype="Int64")[0],
+            "qb_inferred": pd.array([1], dtype="Int64")[0],
+        }
+    )
+    assert _qb_cell(row) == "unconfirmed"
+
+
+def test_qb_cell_is_blank_when_charts_published_and_genuinely_unchanged():
+    row = pd.Series(
+        {
+            "home_qb": "Lamar Jackson",
+            "away_qb": "Joe Burrow",
+            "qb_change_epa_home": 0.0,
+            "qb_change_epa_away": 0.0,
+            "qb_watch": pd.array([0], dtype="Int64")[0],
+            "qb_inferred": pd.array([0], dtype="Int64")[0],
+        }
+    )
+    assert _qb_cell(row) == ""
+
+
+def test_markdown_marks_an_unpublished_chart_as_unconfirmed_not_blank():
+    # The reviewer's scenario A/B: no chart published at all (or only one side's did),
+    # so qb_watch=0 and qb_inferred=1. This must read differently from a genuine
+    # no-change row (case C, qb_watch=0 and qb_inferred=0) in both the CLI table and,
+    # by the same _qb_cell/qbCell contract, the dashboard.
+    feats, preds, probs = _inputs()
+    game_id = build_slate(feats, preds, probs)["game_id"].iloc[0]
+    out = build_slate(feats, preds, probs, starters=_advisory(game_id, watch=0, inferred=1))
+    md = slate_markdown(out)
+    assert "unconfirmed" in md
+    genuinely_unchanged = build_slate(
+        feats, preds, probs, starters=_advisory(game_id, watch=0, inferred=0)
+    )
+    assert "unconfirmed" not in slate_markdown(genuinely_unchanged)
