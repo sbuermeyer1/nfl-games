@@ -276,7 +276,11 @@ class SlateService:
         )
 
     @staticmethod
-    def _market_metadata(snapshot: MarketSnapshot) -> dict:
+    def _snapshot_metadata(snapshot: MarketSnapshot | StarterSnapshot) -> dict:
+        """Shared body for `_market_metadata`/`_starter_metadata`: normalise
+        `observed_at` to UTC and report source/staleness. Both snapshot types carry
+        the same three fields; only the required-vs-optional handling differs
+        between the two callers."""
         observed_at = pd.Timestamp(snapshot.observed_at)
         if observed_at.tzinfo is None:
             observed_at = observed_at.tz_localize(UTC)
@@ -287,6 +291,10 @@ class SlateService:
             "observed_at": observed_at.isoformat(),
             "stale": bool(snapshot.stale),
         }
+
+    @classmethod
+    def _market_metadata(cls, snapshot: MarketSnapshot) -> dict:
+        return cls._snapshot_metadata(snapshot)
 
     def _starter_snapshot(self, season: int, week: int) -> StarterSnapshot | None:
         if self._starter_provider is None:
@@ -305,21 +313,11 @@ class SlateService:
             # 500 the whole slate request.
             return None
 
-    @staticmethod
-    def _starter_metadata(snapshot: StarterSnapshot | None) -> dict | None:
+    @classmethod
+    def _starter_metadata(cls, snapshot: StarterSnapshot | None) -> dict | None:
         if snapshot is None:
             return None
-        observed_at = pd.Timestamp(snapshot.observed_at)
-        observed_at = (
-            observed_at.tz_localize(UTC)
-            if observed_at.tzinfo is None
-            else observed_at.tz_convert(UTC)
-        )
-        return {
-            "source": snapshot.source,
-            "observed_at": observed_at.isoformat(),
-            "stale": bool(snapshot.stale),
-        }
+        return cls._snapshot_metadata(snapshot)
 
     @staticmethod
     def _json_records(frame: pd.DataFrame) -> list[dict]:
