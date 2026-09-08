@@ -39,11 +39,14 @@ jobs:
           else
             python scripts/refresh_2026.py --write
           fi
+      - name: Refresh starter advisory artifact
+        shell: bash
+        run: python scripts/build_starter_advisory.py --write
       - run: docker build -t nfl-game-model:refresh .
       - name: Commit changed artifacts
         shell: bash
         run: |
-          git add data/processed/game_features.parquet data/processed/schedule_2026.parquet
+          git add data/processed/game_features.parquet data/processed/schedule_2026.parquet data/processed/starter_advisory.parquet
           git diff --cached --quiet && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
