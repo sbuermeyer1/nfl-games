@@ -256,7 +256,6 @@ def test_load_app_wires_starter_provider(tmp_path, monkeypatch):
     tracker = write_tracker_artifact(tmp_path)
     schedule = write_schedule_artifact(tmp_path)
 
-    from nfl_game.market.live_starters import NflverseStarterProvider
     from nfl_game.web.service import SlateService
 
     original_from_parquet = SlateService.from_parquet
@@ -275,7 +274,20 @@ def test_load_app_wires_starter_provider(tmp_path, monkeypatch):
 
     load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
 
-    assert isinstance(captured["starter_provider"], NflverseStarterProvider)
+    # The advisory is DISABLED on the web tier and this test pins that deliberately.
+    #
+    # It was originally the reverse -- it asserted a provider WAS wired, because the
+    # feature had once shipped inert with every test green. It is inverted now for a
+    # measured reason: one advisory snapshot peaks at 944.4 MB against a 512 MB Render
+    # dyno (boot floor 216.7 MB, 604.4 MB still resident afterwards), so a single
+    # /api/slate request OOM-killed the worker and every later request -- tracker and
+    # schedule pages included -- returned 502 until the container restarted.
+    #
+    # If you re-enable it by flipping STARTER_ADVISORY_ON_WEB, this test fails, and
+    # that failure is the point: the live provider cannot go back on the web tier until
+    # the advisory is precomputed into a packaged artifact. scripts/slate.py is
+    # unaffected and keeps the full advisory.
+    assert captured["starter_provider"] is None
 
 
 def test_starter_provider_construction_failure_does_not_block_startup(tmp_path, monkeypatch):

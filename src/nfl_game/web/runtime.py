@@ -58,17 +58,43 @@ def resolve_runtime(no_auth: bool, environ: Mapping[str, str]) -> RuntimeConfig:
     )
 
 
-def _build_starter_provider() -> NflverseStarterProvider | None:
-    """Construct the starter-advisory provider without gating startup on it.
+#: The QB starter advisory is DISABLED on the web tier, and this is not a toggle to
+#: flip back without doing the work described below.
+#:
+#: MEASURED 2026-09-08 on the packaged app: boot floor 216.7 MB, and one advisory
+#: snapshot PEAKS AT 944.4 MB, settling at 604.4 MB resident because CPython and
+#: pyarrow do not return freed pages to the OS. The Render free dyno is 512 MB TOTAL.
+#: So a single /api/slate request OOM-killed the worker, and every request after it --
+#: including the tracker and schedule pages, which never touch the advisory -- returned
+#: 502 until the container restarted. That is what took the dashboard down.
+#:
+#: The earlier "20x reduction" (190 MB -> 40 MB) measured `frame.memory_usage(deep=True)`
+#: on the RETAINED frames. That is the logical size of what is kept, not the process's
+#: memory, and it never described the transient cost of downloading and parsing a
+#: 1,059,637-row depth feed. A proxy was verified and reported as the thing itself.
+#:
+#: This also breaks the tier's own contract: `web/` reads packaged artifacts. The market
+#: overlay fetches live because a schedule is tiny; a million-row feed is not the same
+#: kind of thing and does not belong in a web request.
+#:
+#: THE FIX is to precompute the advisory offline into a small packaged artifact,
+#: refreshed by the existing GitHub Actions workflow, and have the web read that file
+#: like every other artifact. Re-enabling the live provider here without that will take
+#: the site down again. `scripts/slate.py` is unaffected: a one-shot CLI on a real
+#: machine has the memory for it and keeps the full advisory.
+STARTER_ADVISORY_ON_WEB = False
 
-    The advisory is presentation-only (see live_starters.py's module docstring) and
-    must never prevent the dashboard from starting -- unlike the dataset/tracker/
-    schedule artifacts above, whose guards must keep failing closed exactly as they
-    do. Constructing NflverseStarterProvider() does no I/O today, so this is not
-    expected to raise, but the same "never block startup" invariant that governs
-    every OTHER failure of this advisory (see live_starters.py, web/service.py)
-    applies here too.
+
+def _build_starter_provider() -> NflverseStarterProvider | None:
+    """Return the starter-advisory provider, or None while it is disabled on web.
+
+    See STARTER_ADVISORY_ON_WEB above for why this returns None today. The guard
+    below stays because the advisory is presentation-only and must never prevent the
+    dashboard from starting -- unlike the dataset/tracker/schedule artifacts, whose
+    guards must keep failing closed exactly as they do.
     """
+    if not STARTER_ADVISORY_ON_WEB:
+        return None
     try:
         return NflverseStarterProvider()
     except Exception:  # noqa: BLE001 - presentation-only; must never block startup
