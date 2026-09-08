@@ -26,6 +26,7 @@ data/raw/line_history/*
 !data/processed/game_features.parquet
 !data/processed/tracker_ledger.parquet
 !data/processed/schedule_2026.parquet
+!data/processed/starter_advisory.parquet
 
 # Ridge-v2 research track: the manifest is the committed provenance record. Its feature
 # parquet is deliberately NOT negated -- it is 7.3 MB against v1's 251 KB and would be

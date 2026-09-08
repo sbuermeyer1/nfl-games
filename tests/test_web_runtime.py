@@ -3,6 +3,7 @@ import math
 import pandas as pd
 import pytest
 
+from nfl_game.market.packaged_starters import PackagedStarterProvider
 from nfl_game.model.features import FEATURE_COLS
 from nfl_game.paths import PROCESSED_DIR
 from nfl_game.web.runtime import RuntimeConfig, RuntimeConfigError, load_app, resolve_runtime
@@ -274,37 +275,41 @@ def test_load_app_wires_starter_provider(tmp_path, monkeypatch):
 
     load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
 
-    # The advisory is DISABLED on the web tier and this test pins that deliberately.
+    # The advisory is RE-ENABLED on the web tier, now backed by a precomputed packaged
+    # artifact instead of the live provider -- see PackagedStarterProvider and
+    # STARTER_ADVISORY_PATH in runtime.py.
     #
-    # It was originally the reverse -- it asserted a provider WAS wired, because the
-    # feature had once shipped inert with every test green. It is inverted now for a
-    # measured reason: one advisory snapshot peaks at 944.4 MB against a 512 MB Render
-    # dyno (boot floor 216.7 MB, 604.4 MB still resident afterwards), so a single
-    # /api/slate request OOM-killed the worker and every later request -- tracker and
-    # schedule pages included -- returned 502 until the container restarted.
-    #
-    # If you re-enable it by flipping STARTER_ADVISORY_ON_WEB, this test fails, and
-    # that failure is the point: the live provider cannot go back on the web tier until
-    # the advisory is precomputed into a packaged artifact. scripts/slate.py is
-    # unaffected and keeps the full advisory.
-    assert captured["starter_provider"] is None
+    # It was disabled for a measured reason: one LIVE-provider snapshot peaked at
+    # 944.4 MB against a 512 MB Render dyno (boot floor 216.7 MB, 604.4 MB still
+    # resident afterwards), so a single /api/slate request OOM-killed the worker and
+    # every later request -- tracker and schedule pages included -- returned 502 until
+    # the container restarted. That risk is why it is specifically the PACKAGED
+    # provider wired here, not NflverseStarterProvider: the packaged provider only ever
+    # reads a small precomputed parquet file at construction, and the 1,059,637-row
+    # depth-feed download/parse now happens offline in
+    # scripts/build_starter_advisory.py, never inside a web request. scripts/slate.py
+    # is unaffected and keeps the live provider.
+    assert isinstance(captured["starter_provider"], PackagedStarterProvider)
 
 
 def test_starter_provider_construction_failure_does_not_block_startup(tmp_path, monkeypatch):
     """The advisory is presentation-only and must never prevent the dashboard from
-    starting. Before this fix, NflverseStarterProvider() was constructed inside the
-    try/except that raises "cannot load packaged 2026 schedule ..." -- a construction
-    failure there would both misattribute the error and fail closed for a
-    presentation-only column. Force construction to fail and confirm load_app still
-    succeeds, with no starter provider wired in."""
+    starting. Before the original fix, NflverseStarterProvider() was constructed
+    inside the try/except that raises "cannot load packaged 2026 schedule ..." -- a
+    construction failure there would both misattribute the error and fail closed for a
+    presentation-only column. The provider is now PackagedStarterProvider (see
+    STARTER_ADVISORY_PATH in runtime.py -- the OOM measurement that forced this design
+    is documented there), but the same startup guarantee applies to it: force
+    construction to fail and confirm load_app still succeeds, with no starter provider
+    wired in."""
     dataset = write_feature_artifact(tmp_path)
     tracker = write_tracker_artifact(tmp_path)
     schedule = write_schedule_artifact(tmp_path)
 
-    def boom():
-        raise RuntimeError("cannot create executor thread")
+    def boom(path):
+        raise RuntimeError("cannot read packaged starter advisory")
 
-    monkeypatch.setattr("nfl_game.web.runtime.NflverseStarterProvider", boom)
+    monkeypatch.setattr("nfl_game.web.runtime.PackagedStarterProvider", boom)
 
     app = load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
 

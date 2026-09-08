@@ -9,7 +9,8 @@ import pandas as pd
 
 from nfl_game.data.schedule import normalize_schedule
 from nfl_game.market.live import NflverseMarketProvider
-from nfl_game.market.live_starters import NflverseStarterProvider
+from nfl_game.market.packaged_starters import PackagedStarterProvider
+from nfl_game.paths import PROCESSED_DIR
 from nfl_game.web.app import create_app
 from nfl_game.web.service import SlateService
 from nfl_game.web.tracker_service import TrackerService
@@ -58,45 +59,37 @@ def resolve_runtime(no_auth: bool, environ: Mapping[str, str]) -> RuntimeConfig:
     )
 
 
-#: The QB starter advisory is DISABLED on the web tier, and this is not a toggle to
-#: flip back without doing the work described below.
-#:
 #: MEASURED 2026-09-08 on the packaged app: boot floor 216.7 MB, and one advisory
-#: snapshot PEAKS AT 944.4 MB, settling at 604.4 MB resident because CPython and
-#: pyarrow do not return freed pages to the OS. The Render free dyno is 512 MB TOTAL.
-#: So a single /api/slate request OOM-killed the worker, and every request after it --
-#: including the tracker and schedule pages, which never touch the advisory -- returned
-#: 502 until the container restarted. That is what took the dashboard down.
+#: snapshot built by the LIVE provider (`NflverseStarterProvider`, which downloads and
+#: parses the full 1,059,637-row nflverse depth-chart feed inside the request) PEAKED
+#: AT 944.4 MB, settling at 604.4 MB resident because CPython and pyarrow do not return
+#: freed pages to the OS. The Render free dyno is 512 MB TOTAL. So a single /api/slate
+#: request OOM-killed the worker, and every request after it -- including the tracker
+#: and schedule pages, which never touch the advisory -- returned 502 until the
+#: container restarted. That is what took the dashboard down, and it is also a breach
+#: of the tier's own contract: `web/` reads packaged artifacts. The market overlay
+#: fetches live because a schedule is tiny; a million-row feed is not the same kind of
+#: thing and does not belong in a web request.
 #:
-#: The earlier "20x reduction" (190 MB -> 40 MB) measured `frame.memory_usage(deep=True)`
-#: on the RETAINED frames. That is the logical size of what is kept, not the process's
-#: memory, and it never described the transient cost of downloading and parsing a
-#: 1,059,637-row depth feed. A proxy was verified and reported as the thing itself.
-#:
-#: This also breaks the tier's own contract: `web/` reads packaged artifacts. The market
-#: overlay fetches live because a schedule is tiny; a million-row feed is not the same
-#: kind of thing and does not belong in a web request.
-#:
-#: THE FIX is to precompute the advisory offline into a small packaged artifact,
-#: refreshed by the existing GitHub Actions workflow, and have the web read that file
-#: like every other artifact. Re-enabling the live provider here without that will take
-#: the site down again. `scripts/slate.py` is unaffected: a one-shot CLI on a real
-#: machine has the memory for it and keeps the full advisory.
-STARTER_ADVISORY_ON_WEB = False
+#: The fix below: `scripts/build_starter_advisory.py` precomputes the advisory OFFLINE
+#: (on a GitHub Actions runner with gigabytes of headroom, refreshed daily) into a
+#: small packaged artifact, `PackagedStarterProvider` only ever reads that file, and
+#: this tier never imports `NflverseStarterProvider` again. Do not reintroduce it here
+#: -- `scripts/slate.py` is unaffected and keeps the live provider: a one-shot CLI on a
+#: real machine has the memory for it.
+STARTER_ADVISORY_PATH = PROCESSED_DIR / "starter_advisory.parquet"
 
 
-def _build_starter_provider() -> NflverseStarterProvider | None:
-    """Return the starter-advisory provider, or None while it is disabled on web.
+def _build_starter_provider() -> PackagedStarterProvider | None:
+    """Return the packaged starter-advisory provider, or None if it cannot be built.
 
-    See STARTER_ADVISORY_ON_WEB above for why this returns None today. The guard
-    below stays because the advisory is presentation-only and must never prevent the
-    dashboard from starting -- unlike the dataset/tracker/schedule artifacts, whose
-    guards must keep failing closed exactly as they do.
+    Construction reads the small packaged artifact once (see PackagedStarterProvider).
+    That read must never prevent the dashboard from starting -- the advisory is
+    presentation-only -- so a missing or malformed artifact degrades to no advisory,
+    unlike the dataset/tracker/schedule guards below, which must keep failing closed.
     """
-    if not STARTER_ADVISORY_ON_WEB:
-        return None
     try:
-        return NflverseStarterProvider()
+        return PackagedStarterProvider(STARTER_ADVISORY_PATH)
     except Exception:  # noqa: BLE001 - presentation-only; must never block startup
         return None
 
