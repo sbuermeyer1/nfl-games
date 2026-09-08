@@ -296,6 +296,14 @@ class SlateService:
         except StartersUnavailableError:
             # Advisory only -- a slate without it is still a correct slate.
             return None
+        except Exception:  # noqa: BLE001 - presentation-only backstop; mirrors the
+            # suppression rationale in live_starters.py. The provider's snapshot()
+            # catches everything raised FROM INSIDE its own try, but
+            # self._executor.submit(...) sits outside that try and can raise
+            # RuntimeError (executor shut down) or OSError (thread creation failure)
+            # under pressure. Either must still degrade to a missing advisory, never
+            # 500 the whole slate request.
+            return None
 
     @staticmethod
     def _starter_metadata(snapshot: StarterSnapshot | None) -> dict | None:

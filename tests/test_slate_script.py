@@ -17,8 +17,9 @@ def test_slate_help_documents_the_no_starters_flag():
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    assert out.returncode == 0
     assert "--no-starters" in out.stdout
 
 
@@ -48,6 +49,34 @@ def test_an_unavailable_starter_feed_still_prints_the_slate(monkeypatch, tmp_pat
         raise StartersUnavailableError("feed down")
 
     monkeypatch.setattr(NflverseStarterProvider, "snapshot", raise_unavailable)
+
+    feats = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
+    season = int(feats["season"].max())
+    week = int(feats.loc[feats["season"].eq(season), "week"].min())
+
+    slate.main(["--season", str(season), "--week", str(week)])
+
+    out = capsys.readouterr().out
+    assert "warning: expected-starter advisory unavailable" in out
+    assert "| QB |" in out
+
+
+def test_a_non_starters_unavailable_exception_still_prints_the_slate(monkeypatch, tmp_path, capsys):
+    """The provider's own try/except never raises anything but
+    StartersUnavailableError from inside itself, but `self._executor.submit(...)`
+    sits outside that try and can raise RuntimeError (executor shut down) or OSError
+    (thread creation failure) under pressure. Mirrors
+    test_an_unavailable_starter_feed_still_prints_the_slate above with a different
+    exception type -- see test_web_service.py's sibling test."""
+    tmp_path.joinpath("game_features.parquet").write_bytes(
+        (PROCESSED_DIR / "game_features.parquet").read_bytes()
+    )
+    monkeypatch.setattr(slate, "PROCESSED_DIR", tmp_path)
+
+    def raise_runtime_error(self, season, week):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+    monkeypatch.setattr(NflverseStarterProvider, "snapshot", raise_runtime_error)
 
     feats = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
     season = int(feats["season"].max())

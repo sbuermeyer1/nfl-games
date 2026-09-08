@@ -71,6 +71,13 @@ def main(argv: list[str] | None = None) -> None:
             # Advisory only. A slate that prints without it is still correct; a slate
             # that refuses to print because a depth chart was unreachable is not.
             print(f"warning: expected-starter advisory unavailable ({exc})")
+        except Exception as exc:  # noqa: BLE001 - presentation-only backstop; mirrors
+            # the suppression rationale in live_starters.py and web/service.py's
+            # identical backstop. self._executor.submit(...) inside the provider sits
+            # outside its own try and can raise RuntimeError or OSError under
+            # pressure -- either must still degrade to a missing advisory, never
+            # abort the CLI run.
+            print(f"warning: expected-starter advisory unavailable ({exc})")
 
     slate = build_slate(
         target, preds, probs, edge_threshold=args.edge_threshold, starters=starters

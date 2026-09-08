@@ -627,6 +627,20 @@ class _BrokenStarterProvider:
         raise StartersUnavailableError("down")
 
 
+class _ExecutorDownStarterProvider:
+    """Raises something other than StartersUnavailableError.
+
+    Mirrors what `self._executor.submit(...)` in live_starters.py can raise from
+    OUTSIDE that provider's own try/except -- RuntimeError if the executor has been
+    shut down, or OSError if thread creation fails under pressure. Neither is
+    `StartersUnavailableError`, so the service's own catch must be widened to treat
+    this the same as any other advisory failure.
+    """
+
+    def snapshot(self, season, week):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+
 def test_payload_carries_starter_metadata_when_a_provider_is_configured(monkeypatch):
     service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=_StubStarterProvider())
     payload = service.payload(2026, 1, "ridge", 2.0)
@@ -644,6 +658,20 @@ def test_payload_starters_key_is_none_without_a_provider(monkeypatch):
 
 def test_an_unavailable_starter_feed_still_returns_a_slate(monkeypatch):
     service, _ = fake_fitted_2026_service(monkeypatch, starter_provider=_BrokenStarterProvider())
+    payload = service.payload(2026, 1, "ridge", 2.0)
+    assert payload["games"]
+    assert payload["starters"] is None
+    assert payload["games"][0]["qb_watch"] is None
+
+
+def test_a_non_starters_unavailable_exception_still_returns_a_slate(monkeypatch):
+    """The provider's own try/except never raises anything but
+    StartersUnavailableError from inside itself, but `self._executor.submit(...)`
+    sits outside that try and can raise RuntimeError or OSError under pressure.
+    Either must still degrade to a missing advisory, not 500 the whole request."""
+    service, _ = fake_fitted_2026_service(
+        monkeypatch, starter_provider=_ExecutorDownStarterProvider()
+    )
     payload = service.payload(2026, 1, "ridge", 2.0)
     assert payload["games"]
     assert payload["starters"] is None
