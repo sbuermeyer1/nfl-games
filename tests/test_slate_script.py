@@ -61,6 +61,43 @@ def test_an_unavailable_starter_feed_still_prints_the_slate(monkeypatch, tmp_pat
     assert "| QB |" in out
 
 
+def test_main_constructs_the_starter_provider_with_a_generous_timeout(monkeypatch, tmp_path, capsys):
+    """`scripts/slate.py` is a one-shot CLI with no second request to fall back on, so
+    it must not silently inherit NflverseStarterProvider's web-tuned 15.0s default --
+    that default relies on a follow-up request finding a background load cached, which
+    this CLI never makes. Fakes out the provider entirely (never touches the network)
+    and records the kwargs `main()` constructs it with, then fails soft via
+    StartersUnavailableError so the rest of `main()` runs exactly like the fail-soft
+    tests above."""
+    tmp_path.joinpath("game_features.parquet").write_bytes(
+        (PROCESSED_DIR / "game_features.parquet").read_bytes()
+    )
+    monkeypatch.setattr(slate, "PROCESSED_DIR", tmp_path)
+
+    captured_kwargs = {}
+
+    class FakeProvider:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+        def snapshot(self, season, week):
+            raise StartersUnavailableError("feed down")
+
+    monkeypatch.setattr(slate, "NflverseStarterProvider", FakeProvider)
+
+    feats = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
+    season = int(feats["season"].max())
+    week = int(feats.loc[feats["season"].eq(season), "week"].min())
+
+    slate.main(["--season", str(season), "--week", str(week)])
+
+    assert captured_kwargs.get("timeout_seconds") == 60.0
+
+    out = capsys.readouterr().out
+    assert "warning: expected-starter advisory unavailable" in out
+    assert "| QB |" in out
+
+
 def test_a_non_starters_unavailable_exception_still_prints_the_slate(monkeypatch, tmp_path, capsys):
     """The provider's own try/except never raises anything but
     StartersUnavailableError from inside itself, but `self._executor.submit(...)`
