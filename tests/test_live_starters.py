@@ -109,6 +109,22 @@ def test_a_failing_load_with_no_cache_raises():
         _provider(depth_loader=boom).snapshot(2025, 5)
 
 
+def test_a_malformed_advisory_frame_degrades_instead_of_leaking_a_keyerror(monkeypatch):
+    """ADVISORY_COLS is never imported for validation in live_starters.py -- a
+    malformed advisory frame (e.g. a stale cached schema) would otherwise surface as
+    a KeyError deep inside a request instead of degrading softly, same as any other
+    provider failure."""
+    import nfl_game.market.live_starters as live_starters_module
+
+    monkeypatch.setattr(
+        live_starters_module,
+        "starter_advisory",
+        lambda *args, **kwargs: pd.DataFrame({"game_id": ["x"]}),
+    )
+    with pytest.raises(StartersUnavailableError):
+        _provider().snapshot(2025, 5)
+
+
 def test_a_failing_load_after_a_good_one_returns_the_cache_marked_stale():
     state = {"fail": False}
 

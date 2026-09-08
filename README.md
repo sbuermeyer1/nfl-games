@@ -125,7 +125,8 @@ The `QB` column shows an expected-starter advisory, refreshed independently of t
 market lines from a live depth-chart feed (30-minute cache). It reads `n/a` when that
 feed is unreachable; this is expected, not a fault, and it never affects the model
 spread/total or the edge marker. `scripts/slate.py --no-starters` skips the live fetch
-entirely and prints the slate without the column's data.
+entirely, so the `QB` column reads `n/a` the same way it does when the feed is
+unreachable.
 
 The browser uses these read-only endpoints:
 

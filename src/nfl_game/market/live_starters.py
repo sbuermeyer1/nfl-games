@@ -44,7 +44,7 @@ from nfl_game.data.nfl import (
     load_schedules,
 )
 from nfl_game.ratings.qb import normalize_depth_chart_history, qb_week_stats
-from nfl_game.ratings.starters import starter_advisory
+from nfl_game.ratings.starters import ADVISORY_COLS, starter_advisory
 
 
 class StartersUnavailableError(RuntimeError):
@@ -97,6 +97,10 @@ class NflverseStarterProvider:
         stats_loader=load_player_stats,
         players_loader=load_players,
         schedule_loader=load_schedules,
+        # Must return a timezone-aware datetime. A naive one reaches `_cutoff_for` in
+        # qb.py as the depth-chart cutoff, which raises there -- a failure this
+        # provider still degrades soft on, but from deep and unobviously inside qb.py
+        # rather than here.
         clock=lambda: datetime.now(UTC),
         ttl=timedelta(minutes=30),
         # Measured cold load on a dev machine: depth charts (2025+2026) 4.85s, stats
@@ -211,7 +215,8 @@ class NflverseStarterProvider:
     def _load_snapshot(self, key, now: datetime) -> StarterSnapshot:
         season, week = key
         # The prior season carries the "recent starter" for an early-season week; the
-        # full corpus is deliberately not loaded behind a live request. See the plan.
+        # full corpus is deliberately not loaded behind a live request. See the
+        # module docstring above.
         # Only `targets` below differs per week -- every one of these four feeds is
         # season-scoped, so it is loaded once per season and reused across weeks.
         seasons = [season - 1, season]
@@ -245,6 +250,14 @@ class NflverseStarterProvider:
             [(season, week)],
             cutoff=cutoff,
         )
+        # Cheap shape assertion: a malformed advisory frame (e.g. from a cached row
+        # source with a stale schema) would otherwise surface as a KeyError inside a
+        # request rather than degrading softly. Raising here puts it inside this
+        # method's own error path -- caught by snapshot()'s broad except -- so it
+        # degrades to a stale cache or a missing (n/a) advisory like any other
+        # provider failure, instead of 500ing the slate request.
+        if set(rows.columns) != set(ADVISORY_COLS):
+            raise ValueError(f"advisory rows have unexpected columns: {sorted(rows.columns)}")
         return StarterSnapshot(rows=rows.copy(deep=True), observed_at=observed_at)
 
     def _store_refresh(self, key, future, refreshed):
