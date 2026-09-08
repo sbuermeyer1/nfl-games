@@ -43,7 +43,7 @@ from nfl_game.data.nfl import (
     load_players,
     load_schedules,
 )
-from nfl_game.ratings.qb import qb_week_stats
+from nfl_game.ratings.qb import normalize_depth_chart_history, qb_week_stats
 from nfl_game.ratings.starters import starter_advisory
 
 
@@ -67,6 +67,20 @@ class _SeasonFrames:
     (or unconditionally for players) -- only the advisory's `targets` argument differs
     per week. Without this, stepping through a season's weeks paid a full four-feed
     reload on every week, serialized behind the provider's single-worker executor.
+
+    `depth` is NOT the raw depth-chart feed. The advisory only ever reads quarterback
+    rows (`qb_features_for_targets` immediately reduces its `depth_history` argument to
+    QB rows via `normalize_depth_chart_history`), but the raw feed carries every
+    position -- measured at 1,059,637 rows / 158.6 MB on live 2025+2026 data, against
+    39,969 rows / 7.9 MB once reduced to QB rows. Caching the raw frame held that extra
+    ~151 MB for the full 30-minute TTL on a 512 MB dyno, so it is normalized and
+    filtered to QB rows here, once per season load, and the raw frame is dropped
+    immediately after. `qb_features_for_targets` re-normalizes whatever it is handed
+    regardless (its `depth_history` parameter is documented as the raw feed), but
+    `normalize_depth_charts` tolerates an already-normalized, already-filtered frame --
+    see `_coalesce_optional` and the comment on `normalize_depth_chart_history` -- and
+    re-deriving costs single-digit milliseconds on this already-small frame, not the
+    36 seconds the module docstring measures on the full raw feed.
     """
 
     depth: pd.DataFrame
@@ -150,11 +164,17 @@ class NflverseStarterProvider:
         # and nobody would be told the flaky-loader path went untested.
         if cached is not None and now - cached.loaded_at < self._ttl:
             return cached
+        schedules = self._schedule_loader(seasons, save=False)
+        # Reduce the raw depth feed to QB rows immediately, before it is cached -- see
+        # the `_SeasonFrames.depth` docstring. The raw frame is not kept anywhere past
+        # this line, so it is released once this call returns rather than held for the
+        # full TTL.
+        depth_raw = self._depth_loader(seasons, save=False)
         frames = _SeasonFrames(
-            depth=self._depth_loader(seasons, save=False),
+            depth=normalize_depth_chart_history(depth_raw, schedules),
             stats=self._load_stats_per_season(seasons),
             players=self._players_loader(save=False),
-            schedules=self._schedule_loader(seasons, save=False),
+            schedules=schedules,
             loaded_at=now,
         )
         self._season_cache[season] = frames

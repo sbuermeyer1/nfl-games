@@ -327,6 +327,35 @@ def test_stats_load_raises_when_no_season_is_available():
         _provider(stats_loader=always_fails).snapshot(2025, 5)
 
 
+def test_season_cache_holds_the_qb_filtered_depth_frame_not_the_raw_feed():
+    """The advisory only ever reads QB rows (see `qb_features_for_targets`), but the
+    raw depth feed carries every position -- 1,059,637 rows / 158.6 MB measured on
+    live 2025+2026 data, vs 39,969 rows / 7.9 MB once reduced to QB rows. Caching the
+    raw frame for the full 30-minute TTL is exactly the ~150 MB this fix removes; this
+    test fails if a later change reverts `_season_frames` to caching the raw feed."""
+    _schedules, depth, _stats, _players = _loaders()
+    non_qb_row = pd.DataFrame(
+        {
+            "club_code": ["BAL"],
+            "gsis_id": ["HENRY"],
+            "pos_abb": ["RB"],
+            "pos_rank": [1.0],
+            "dt": pd.to_datetime(["2025-10-04 12:00"], utc=True),
+        }
+    )
+    depth_with_rb = pd.concat([depth, non_qb_row], ignore_index=True)
+    provider = _provider(depth_loader=lambda seasons, save=False: depth_with_rb)
+    frames = provider._season_frames(2025, [2024, 2025], provider._clock())
+    assert list(frames.depth.columns) == ["season", "week", "team", "player_id", "rank", "dt"], (
+        "the cached depth frame must be the QB-normalized shape, not the raw feed's "
+        "columns (which include `position`)"
+    )
+    assert set(frames.depth["player_id"]) == {"HUNT", "BURROW"}, (
+        "the cached depth frame must be filtered to QB rows only -- the RB row must "
+        "not survive into the cache"
+    )
+
+
 def test_stats_load_uses_both_seasons_when_both_are_available():
     """The direction most likely to regress unnoticed: tolerating a missing season
     must not turn into silently dropping a season that IS present. Assert per-season
