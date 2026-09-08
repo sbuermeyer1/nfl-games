@@ -58,6 +58,23 @@ def resolve_runtime(no_auth: bool, environ: Mapping[str, str]) -> RuntimeConfig:
     )
 
 
+def _build_starter_provider() -> NflverseStarterProvider | None:
+    """Construct the starter-advisory provider without gating startup on it.
+
+    The advisory is presentation-only (see live_starters.py's module docstring) and
+    must never prevent the dashboard from starting -- unlike the dataset/tracker/
+    schedule artifacts above, whose guards must keep failing closed exactly as they
+    do. Constructing NflverseStarterProvider() does no I/O today, so this is not
+    expected to raise, but the same "never block startup" invariant that governs
+    every OTHER failure of this advisory (see live_starters.py, web/service.py)
+    applies here too.
+    """
+    try:
+        return NflverseStarterProvider()
+    except Exception:  # noqa: BLE001 - presentation-only; must never block startup
+        return None
+
+
 def load_app(
     config: RuntimeConfig,
     dataset_path: str | Path,
@@ -79,9 +96,9 @@ def load_app(
         if packaged_schedule.empty:
             raise ValueError("schedule contains no 2026 regular-season games")
         market_provider = NflverseMarketProvider()
-        starter_provider = NflverseStarterProvider()
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged 2026 schedule {schedule}: {exc}") from exc
+    starter_provider = _build_starter_provider()
     try:
         slate_service = SlateService.from_parquet(
             dataset,

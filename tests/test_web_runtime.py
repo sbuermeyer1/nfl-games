@@ -278,6 +278,27 @@ def test_load_app_wires_starter_provider(tmp_path, monkeypatch):
     assert isinstance(captured["starter_provider"], NflverseStarterProvider)
 
 
+def test_starter_provider_construction_failure_does_not_block_startup(tmp_path, monkeypatch):
+    """The advisory is presentation-only and must never prevent the dashboard from
+    starting. Before this fix, NflverseStarterProvider() was constructed inside the
+    try/except that raises "cannot load packaged 2026 schedule ..." -- a construction
+    failure there would both misattribute the error and fail closed for a
+    presentation-only column. Force construction to fail and confirm load_app still
+    succeeds, with no starter provider wired in."""
+    dataset = write_feature_artifact(tmp_path)
+    tracker = write_tracker_artifact(tmp_path)
+    schedule = write_schedule_artifact(tmp_path)
+
+    def boom():
+        raise RuntimeError("cannot create executor thread")
+
+    monkeypatch.setattr("nfl_game.web.runtime.NflverseStarterProvider", boom)
+
+    app = load_app(resolve_runtime(no_auth=True, environ={}), dataset, tracker, schedule)
+
+    assert app is not None
+
+
 def test_entrypoint_refuses_to_start_without_access_code(monkeypatch, capsys):
     """Catch the command-line entry point bypassing the fail-closed runtime guard."""
     monkeypatch.delenv("ACCESS_CODE", raising=False)
