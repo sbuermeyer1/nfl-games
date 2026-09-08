@@ -76,15 +76,16 @@ Render's free plan, which spins a service down after roughly 15 minutes of inact
 The next request returns 502 while the container restarts and re-imports pandas and
 scikit-learn -- about 6.3 seconds of imports measured on a dev machine, slower on a
 shared dyno. Reloading 30-60 seconds later succeeds. `.github/workflows/keep-web-awake.yml`
-pings `/health` every ten minutes Thursday through Monday, 12:00-23:59 UTC in season
-months, which covers slate publication through Monday night; a visit outside that window
-can still hit one 502.
+pings `/health` every ten minutes daily, 12:00-23:59 UTC in season months; a visit
+outside that window can still hit one 502. It runs every day rather than only on game
+days because the tracker publishes each pick five days before kickoff, so a Sunday
+game's pick appears on Tuesday.
 
 That window is deliberate rather than continuous. Render's free tier allows **750
 instance-hours per month across every free service on the account**, and there are two --
 this one and `ashburn-draft` in the fantasy repo. Keeping both awake around the clock
 would cost about 1,460 hours and exhaust the quota, taking down both. The current window
-costs roughly 260. **Recheck that arithmetic before widening the schedule or adding a
+costs roughly 365. **Recheck that arithmetic before widening the schedule or adding a
 third free service.**
 
 The dashboard serves three checked-in artifacts:

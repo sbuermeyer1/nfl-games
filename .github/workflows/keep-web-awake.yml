@@ -12,10 +12,15 @@
 # awake continuously would cost ~1,460 hours and exhaust the quota, taking BOTH down.
 # That is a worse failure than an occasional 502.
 #
-# This window -- Thu through Mon, 12:00-23:59 UTC, in season months -- is roughly
-# 260 instance-hours per month. It covers slate publication through Monday night and
-# leaves headroom for the draft app's August spike. A visit outside the window still
-# 502s once and works on reload, which is the accepted trade.
+# This window -- every day, 12:00-23:59 UTC, in season months -- is roughly 365
+# instance-hours per month, leaving headroom for the draft app's August spike. A visit
+# outside the window still 502s once and works on reload, which is the accepted trade.
+#
+# WHY ALL SEVEN DAYS AND NOT JUST GAME DAYS: an earlier version ran Thu-Mon, reasoning
+# about when games are played. That was wrong. The tracker publishes each pick FIVE DAYS
+# before its kickoff (`PUBLISH_BEFORE`, tracking/live.py), so a Sunday game's pick
+# appears on TUESDAY -- which is the day the slate you would actually act on shows up,
+# and the old window missed it along with Wednesday.
 #
 # If a third free service is ever added, or the draft app starts being kept awake,
 # RECHECK THE ARITHMETIC before widening this.
@@ -26,8 +31,8 @@ on:
   workflow_dispatch:
   schedule:
     # Every 10 minutes (under Render's ~15-minute idle timeout), 12:00-23:59 UTC,
-    # Thu(4) Fri(5) Sat(6) Sun(0) Mon(1), August-February.
-    - cron: "*/10 12-23 * 8-12,1-2 0,1,4,5,6"
+    # every day, August-February.
+    - cron: "*/10 12-23 * 8-12,1-2 *"
 
 # A pinger needs no repository access at all. Deliberately not folded into
 # update-2026-tracker.yml, which holds `contents: write` and a data-writer
