@@ -176,16 +176,38 @@ def test_a_short_schedule_withholds_rather_than_reading_as_a_finished_season():
     assert report["season_complete"] is False
 
 
-def test_postseason_and_other_seasons_do_not_count_toward_completion():
-    """The registration is 2026 REG; padding with playoff or 2025 rows must not finish it."""
-    reg = schedule(with_result=271)
-    padding = pd.concat([
-        schedule(games=8, game_type="POST"),
-        schedule(games=8, season=2025),
-    ], ignore_index=True)
+def test_another_seasons_game_cannot_stand_in_for_a_missing_2026_game():
+    """The count conjunct hides the season filter unless a row is there to be miscounted.
+
+    A schedule padded ALONGSIDE a complete 2026 cannot fail this way -- it just overshoots 272
+    and is rejected for the wrong reason. Only a 2026 that is one game short, with a foreign row
+    filling the gap, can tell a working filter from a dropped one.
+    """
+    frame = ledger([live("a", 6.0, 1.0)])
+    padded = pd.concat([schedule(games=271), schedule(games=1, season=2025)], ignore_index=True)
+
+    report = evaluate_prereg.evaluate(frame, padded)
+
+    assert report["season_complete"] is False
+    assert report["complete"] is False
+
+
+def test_a_postseason_game_cannot_stand_in_for_a_missing_regular_season_game():
+    frame = ledger([live("a", 6.0, 1.0)])
+    padded = pd.concat([schedule(games=271), schedule(games=1, game_type="POST")],
+                       ignore_index=True)
+
+    report = evaluate_prereg.evaluate(frame, padded)
+
+    assert report["season_complete"] is False
+    assert report["complete"] is False
+
+
+def test_a_missing_schedule_withholds_rather_than_releasing():
+    """Fail closed: no schedule is no evidence that the season ended."""
     frame = ledger([live("a", 6.0, 1.0)])
 
-    report = evaluate_prereg.evaluate(frame, pd.concat([reg, padding], ignore_index=True))
+    report = evaluate_prereg.evaluate(frame, pd.DataFrame())
 
+    assert report["season_complete"] is False
     assert report["complete"] is False
-    assert report["games_without_result"] == 1
