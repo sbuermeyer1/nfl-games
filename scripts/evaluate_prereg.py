@@ -2,11 +2,20 @@
 
 The registration is `nfl_game.experiments.prereg_totals_2026`; read its docstring first.
 
-This script deliberately WITHHOLDS the primary endpoint until every qualifying game has settled.
-A pre-registered test that lets you watch its primary endpoint accumulate is an optional-stopping
-test wearing a disguise, and the difference has to be enforced in code -- operator discipline has
-already failed once in this repository, when a sizing probe wrote its decisive deltas to disk
-before N was fixed and got through three reviews.
+This script deliberately WITHHOLDS the primary endpoint until the 2026 regular season has
+finished AND every qualifying game has settled. A pre-registered test that lets you watch its
+primary endpoint accumulate is an optional-stopping test wearing a disguise, and the difference
+has to be enforced in code -- operator discipline has already failed once in this repository,
+when a sizing probe wrote its decisive deltas to disk before N was fixed and got through three
+reviews.
+
+AMENDED 2026-09-14, after the gate was found not to do what this docstring already claimed.
+Completion was `pending == 0` alone, which means "every qualifying game published SO FAR has
+settled" -- true on any quiet day between weeks. Run in week 1 it reported `complete: true`,
+`n: 1`, `verdict: "not replicated"`, and it would have emitted a fresh verdict every week of
+the season. The registration itself is untouched (its digest still pins the 2026-08-31 payload);
+this is machinery, and the new condition is outcome-independent and strictly more conservative
+than the one it replaces.
 """
 
 from __future__ import annotations
@@ -21,6 +30,11 @@ import pandas as pd
 from nfl_game.experiments import prereg_totals_2026 as prereg
 from nfl_game.paths import PROCESSED_DIR
 
+#: The 2026 regular season, as recorded in the registration's docstring on the day it was
+#: written ("0 of 272"). Checked as a count, not just for nulls: a truncated schedule artefact
+#: has no unfinished games in it either, and would read as a finished season.
+EXPECTED_REG_GAMES = 272
+
 
 def qualifying(ledger: pd.DataFrame) -> pd.DataFrame:
     """Live, published, in-season totals whose edge magnitude meets the registered threshold."""
@@ -33,6 +47,18 @@ def qualifying(ledger: pd.DataFrame) -> pd.DataFrame:
         & ledger["total_publication_status"].eq("published")
         & edge.abs().ge(prereg.MIN_ABS_EDGE)
     ]
+
+
+def season_progress(schedule: pd.DataFrame) -> tuple[bool, int]:
+    """Whether the registered season is over, and how many of its games are still unplayed."""
+    if schedule.empty:
+        return False, 0
+    rows = schedule.loc[
+        schedule["season"].eq(prereg.SEASON) & schedule["game_type"].astype(str).eq("REG")
+    ]
+    without_result = int(pd.to_numeric(rows.get("result"), errors="coerce").isna().sum())
+    complete = len(rows) == EXPECTED_REG_GAMES and without_result == 0
+    return complete, without_result
 
 
 def _bucket_curve(rows: pd.DataFrame) -> list[dict]:
@@ -49,9 +75,10 @@ def _bucket_curve(rows: pd.DataFrame) -> list[dict]:
     return out
 
 
-def evaluate(ledger: pd.DataFrame) -> dict:
+def evaluate(ledger: pd.DataFrame, schedule: pd.DataFrame) -> dict:
     """Report progress while the season runs; the primary endpoint only once it is done."""
     rows = qualifying(ledger)
+    finished, without_result = season_progress(schedule)
     clv = pd.to_numeric(rows["total_clv"], errors="coerce") if len(rows) else pd.Series(dtype=float)
     settled = int(clv.notna().sum())
     pending = int(len(rows) - settled)
@@ -61,12 +88,14 @@ def evaluate(ledger: pd.DataFrame) -> dict:
         "qualifying": len(rows),
         "settled": settled,
         "pending": pending,
-        "complete": bool(len(rows) > 0 and pending == 0),
+        "season_complete": finished,
+        "games_without_result": without_result,
+        "complete": bool(finished and len(rows) > 0 and pending == 0),
     }
     if not report["complete"]:
         report["withheld"] = (
-            "primary endpoint withheld until every qualifying game has settled; "
-            "see the module docstring"
+            "primary endpoint withheld until the regular season has finished and every "
+            "qualifying game has settled; see the module docstring"
         )
         return report
 
@@ -97,8 +126,10 @@ def evaluate(ledger: pd.DataFrame) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", type=Path, default=PROCESSED_DIR / "tracker_ledger.parquet")
+    parser.add_argument("--schedule", type=Path, default=PROCESSED_DIR / "schedule_2026.parquet")
     args = parser.parse_args(argv)
-    print(json.dumps(evaluate(pd.read_parquet(args.ledger)), indent=2, sort_keys=True))
+    report = evaluate(pd.read_parquet(args.ledger), pd.read_parquet(args.schedule))
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 
