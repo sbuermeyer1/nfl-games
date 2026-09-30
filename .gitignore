@@ -42,3 +42,4 @@ data/raw/line_history/*
 # Static-site export (scripts/export_static_site.py); regenerated on every deploy.
 site/
 .firebase/
+firebase-debug.log
