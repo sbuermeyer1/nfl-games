@@ -71,6 +71,24 @@ cached. **Result: FTN did not help** -- see CLAUDE.md.
 
 ## Web dashboard operations
 
+### Static site (Firebase Hosting)
+
+The public dashboard is a static export at <https://ashburn-nfl-games.web.app> (Firebase
+project `ashburn-nfl-games`). `scripts/export_static_site.py` pre-renders every page and
+API response into `site/` through the same services the served app uses, and a small
+fetch shim lets the unchanged pages read those files. The site is only as fresh as its
+last deploy: lines, the QB advisory, and the week it opens on are fixed at export time.
+
+`.github/workflows/deploy-static-site.yml` rebuilds and deploys after every successful
+refresh or tracker run, hourly in season months, and by manual dispatch. It needs the
+repository secret `FIREBASE_SERVICE_ACCOUNT` (a service-account JSON key with the
+Firebase Hosting Admin role). To deploy by hand from PowerShell:
+
+    .\.venv\Scripts\python.exe scripts\export_static_site.py
+    npx.cmd firebase-tools deploy --only hosting --project ashburn-nfl-games
+
+### Render service
+
 **A 502 on a cold visit is Render waking up, not a fault.** `ashburn-nfl` runs on
 Render's free plan, which spins a service down after roughly 15 minutes of inactivity.
 The next request returns 502 while the container restarts and re-imports pandas and
