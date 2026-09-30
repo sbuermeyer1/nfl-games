@@ -12,6 +12,14 @@ from nfl_game.tracking.live import LiveTrackerLifecycleError
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 NOW = pd.Timestamp("2026-09-05T17:00:00Z")
 GAME_ID = "2026_01_NE_SEA"
+#: The 2026 feature rows as shipped at 8d5667a (2026-09-14), the last refresh whose
+#: prediction weeks were 1 and 2. These tests describe a pre-kickoff week-1 scenario
+#: (NOW, GAME_ID), but the daily refresh rolls played weeks out of the shipped artifact:
+#: once week 1 was final, the 2026-09-15 refresh shipped weeks 2-3, the first
+#: publishable week became 2, and seven tests failed -- which then blocked every
+#: scheduled refresh, because both workflows gate on the suite. Pinning the 2026 rows
+#: freezes the scenario; the historical seasons still come from the shipped artifact.
+WEEK_ONE_FEATURES = PROJECT_ROOT / "tests/fixtures/game_features_2026_wk01_wk02.parquet"
 
 
 def sha256_file(path):
@@ -41,6 +49,19 @@ def schedule_with_unpublished_game_above_the_floor():
     return pd.concat([floor_game, above_floor], ignore_index=True)
 
 
+def week_one_features():
+    """Shipped historical seasons plus the frozen 2026 week 1-2 rows."""
+    shipped = pd.read_parquet(PROJECT_ROOT / "data/processed/game_features.parquet")
+    frozen = pd.read_parquet(WEEK_ONE_FEATURES)
+    # A schema change in the shipped artifact must fail here, by name, rather than
+    # as a confusing NaN-validation error deep inside the updater.
+    assert list(frozen.columns) == list(shipped.columns), (
+        f"game_features schema changed; regenerate {WEEK_ONE_FEATURES.name} with the new columns"
+    )
+    history = shipped.loc[shipped["season"].lt(2026)]
+    return pd.concat([history, frozen], ignore_index=True)
+
+
 def write_artifacts(tmp_path):
     """Stage the packaged artifacts with any LIVE ledger rows stripped.
 
@@ -51,10 +72,13 @@ def write_artifacts(tmp_path):
     updater correctly declines to re-publish and every assertion about a first
     publication fails. Strip live rows here and keep the 1,359 historical rows, which
     are the baseline the updater actually re-checks.
+
+    The same expiry applies to the features, so their 2026 rows are the week-one
+    fixture (see WEEK_ONE_FEATURES) rather than whatever the refresh last shipped.
     """
     feature_path = tmp_path / "game_features.parquet"
     ledger_path = tmp_path / "tracker_ledger.parquet"
-    shutil.copyfile(PROJECT_ROOT / "data/processed/game_features.parquet", feature_path)
+    week_one_features().to_parquet(feature_path, index=False)
     ledger = pd.read_parquet(PROJECT_ROOT / "data/processed/tracker_ledger.parquet")
     historical = ledger.loc[ledger["record_type"].ne("live")].reset_index(drop=True)
     historical.to_parquet(ledger_path, index=False)
