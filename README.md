@@ -87,24 +87,14 @@ Firebase Hosting Admin role). To deploy by hand from PowerShell:
     .\.venv\Scripts\python.exe scripts\export_static_site.py
     npx.cmd firebase-tools deploy --only hosting --project ashburn-nfl-games
 
-### Render service
+### Served app (Render retired)
 
-**A 502 on a cold visit is Render waking up, not a fault.** `ashburn-nfl` runs on
-Render's free plan, which spins a service down after roughly 15 minutes of inactivity.
-The next request returns 502 while the container restarts and re-imports pandas and
-scikit-learn -- about 6.3 seconds of imports measured on a dev machine, slower on a
-shared dyno. Reloading 30-60 seconds later succeeds. `.github/workflows/keep-web-awake.yml`
-pings `/health` every ten minutes daily, 12:00-23:59 UTC in season months; a visit
-outside that window can still hit one 502. It runs every day rather than only on game
-days because the tracker publishes each pick five days before kickoff, so a Sunday
-game's pick appears on Tuesday.
-
-That window is deliberate rather than continuous. Render's free tier allows **750
-instance-hours per month across every free service on the account**, and there are two --
-this one and `ashburn-draft` in the fantasy repo. Keeping both awake around the clock
-would cost about 1,460 hours and exhaust the quota, taking down both. The current window
-costs roughly 365. **Recheck that arithmetic before widening the schedule or adding a
-third free service.**
+The Render service `ashburn-nfl` was retired on 2026-09-30 in favour of the static site;
+`render.yaml` and the `keep-web-awake.yml` pinger were removed then (restore both from
+git history to redeploy). The FastAPI app in `src/nfl_game/web/` is kept: it runs locally
+(see "Run locally"), the Docker image still builds in the refresh workflow, and it is the
+oracle `tests/test_static_export.py` checks every exported file against. The Render
+sections further down are a historical record of that deployment.
 
 The dashboard serves three checked-in artifacts:
 `data/processed/game_features.parquet`, `data/processed/schedule_2026.parquet`, and
@@ -360,7 +350,9 @@ architecture changes.
 
 ### Render deployment and proxy boundary
 
-`render.yaml` defines the Docker Blueprint service named `ashburn-nfl`. In Render,
+*Historical: Render was retired on 2026-09-30 and `render.yaml` removed (see "Served app").*
+
+`render.yaml` defined the Docker Blueprint service named `ashburn-nfl`. In Render,
 create the Blueprint from the reviewed integrated `master` branch, confirm that service
 name, and set a non-empty private `ACCESS_CODE` secret. Do not put the secret in the
 repository, a command history, request logs, or a deployment note. The image packages
@@ -538,6 +530,8 @@ the authenticated browser session. Confirm the tracker is still read-only and ha
 unapproved live records.
 
 ### Executable Docker and Blueprint gate
+
+*Historical: the Blueprint half no longer applies -- `render.yaml` was removed on 2026-09-30.*
 
 Run this gate from a clean checkout of the exact reviewed commit that is being accepted
 for release. Substitute a non-secret local value only for the smoke container; set the
