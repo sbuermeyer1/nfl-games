@@ -5,7 +5,7 @@ from numbers import Integral
 import numpy as np
 import pandas as pd
 
-from nfl_game.tracking.ledger import RECORD_TYPES
+from nfl_game.tracking.ledger import LIFECYCLE_RECORD_TYPES, RECORD_TYPES
 
 QUALIFIED_EDGE = 2.0
 SPREAD_EDGE_THRESHOLDS = (5.0, 10.0, 15.0)
@@ -100,7 +100,7 @@ def _core_summary(selected: pd.DataFrame) -> dict:
             for threshold in SPREAD_EDGE_THRESHOLDS
         ],
     }
-    if selected["record_type"].eq("live").all():
+    if selected["record_type"].isin(LIFECYCLE_RECORD_TYPES).all():
         summary["closing_line"] = {
             "spread": _closing_summary(qualified_spread, "spread"),
             "total": _closing_summary(qualified_total, "total"),

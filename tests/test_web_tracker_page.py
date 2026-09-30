@@ -9,6 +9,7 @@ SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 TRACKER_IDS = (
     "historical-tab",
     "live-tab",
+    "reconstructed-tab",
     "tracker-season",
     "tracker-message",
     "qualified-cards",
@@ -222,6 +223,7 @@ class Element {
 const nodes = Object.fromEntries(input.ids.map(id => [id, new Element('section', id)]));
 nodes['historical-tab'].tagName = 'button';
 nodes['live-tab'].tagName = 'button';
+nodes['reconstructed-tab'].tagName = 'button';
 nodes['tracker-season'].tagName = 'select';
 nodes['tracker-message'].tagName = 'p';
 nodes['spread-edges'].tagName = 'table';
@@ -309,7 +311,9 @@ eval(input.script);
     tabs: {
       historical: nodes['historical-tab']['aria-selected'],
       live: nodes['live-tab']['aria-selected'],
+      reconstructed: nodes['reconstructed-tab']['aria-selected'],
     },
+    reconstructedHidden: nodes['reconstructed-tab'].hidden,
   });
 })().catch(error => {
   globalThis.__state = JSON.stringify({ fatal: error.message, calls, unhandled });
@@ -558,7 +562,7 @@ def test_live_click_before_options_resolve_is_queued_and_preserved():
     state = tracker_state(responses, actions)
 
     assert state["unhandled"] == []
-    assert state["tabs"] == {"historical": "false", "live": "true"}
+    assert state["tabs"] == {"historical": "false", "live": "true", "reconstructed": "false"}
     assert [option["value"] for option in state["season"]["options"]] == ["all", "2026"]
     assert state["season"]["value"] == "all"
     assert "/api/tracker/summary?record_type=live&season=all" in state["calls"]
@@ -620,3 +624,44 @@ def test_unauthorized_response_redirects_to_login():
     assert state["location"] == "/login"
     assert state["calls"] == ["/api/tracker/options"]
     assert state["unhandled"] == []
+
+
+def reconstructed_options():
+    return {
+        **options(),
+        "record_types": ["backtest", "live", "reconstructed"],
+        "seasons": {"backtest": [2024, 2025], "live": [2026], "reconstructed": [2026]},
+        "live_available": True,
+        "reconstructed_available": True,
+    }
+
+
+def test_reconstructed_tab_stays_hidden_without_reconstructed_records():
+    """Catch the outage tab showing when the service offers no reconstructed records."""
+    state = tracker_state(standard_responses(), initialize_actions())
+
+    assert state["reconstructedHidden"] is True
+    assert state["tabs"]["reconstructed"] == "false"
+
+
+def test_reconstructed_tab_loads_its_own_labelled_selection():
+    """Catch the outage tab reusing another record type or losing its disclosure."""
+    reconstructed = {**live_summary(), "record_type": "reconstructed"}
+    responses = {
+        **standard_responses(),
+        "/api/tracker/options": response(body=reconstructed_options()),
+        "/api/tracker/summary?record_type=reconstructed&season=all": response(body=reconstructed),
+    }
+    actions = [
+        *initialize_actions(),
+        {"type": "fire", "target": "reconstructed-tab", "event": "click", "wait": True},
+    ]
+
+    state = tracker_state(responses, actions)
+
+    assert state["reconstructedHidden"] is False
+    assert state["tabs"] == {"historical": "false", "live": "false", "reconstructed": "true"}
+    assert state["calls"][-1] == "/api/tracker/summary?record_type=reconstructed&season=all"
+    assert state["regions"]["tracker-message"].startswith("Reconstructed after the Sept 16-29")
+    assert "Not part of the live record" in state["regions"]["tracker-message"]
+    assert [option["value"] for option in state["season"]["options"]] == ["all", "2026"]

@@ -359,6 +359,11 @@ def main(argv=None, loader=None, now=None) -> int:
     service = SlateService(features)
     first_publishable_week = _first_publishable_week(features, args.season)
     ledger = _load_ledger(args.ledger)
+    # The rewrite below keeps only backtest + live rows, so any other type would be silently
+    # deleted. Reconstructed records live in their own artifact; refuse rather than erase.
+    foreign = sorted(set(ledger["record_type"]) - {"backtest", "live"})
+    if foreign:
+        raise ValueError(f"official ledger must hold only backtest and live rows, found {foreign}")
     historical = ledger.loc[ledger["record_type"].eq("backtest")].copy()
     existing_live = ledger.loc[ledger["record_type"].eq("live")].copy()
     assert_historical_baseline(historical)

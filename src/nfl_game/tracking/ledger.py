@@ -8,7 +8,11 @@ import pandas as pd
 HISTORICAL_MODEL_VERSION = "ridge-v1"
 OFFICIAL_ESTIMATOR = "ridge"
 PUBLICATION_STATUSES = frozenset({"pending", "published", "excluded"})
-RECORD_TYPES = frozenset({"backtest", "live"})
+RECORD_TYPES = frozenset({"backtest", "live", "reconstructed"})
+#: Record types that went through the live publication lifecycle. "reconstructed" rows
+#: replay that lifecycle after the fact (scripts/reconstruct_outage_2026.py) and are kept
+#: in their own artifact, never in the official live ledger.
+LIFECYCLE_RECORD_TYPES = frozenset({"live", "reconstructed"})
 GRADE_VALUES = frozenset({"win", "loss", "push", "pending", "no_pick"})
 PICK_VALUES = {
     "spread_pick": frozenset({"home", "away"}),
@@ -404,7 +408,7 @@ def validate_ledger(ledger):
             raise ValueError(f"invalid {column}")
 
     backtest = ledger["record_type"].eq("backtest")
-    live = ledger["record_type"].eq("live")
+    live = ledger["record_type"].isin(LIFECYCLE_RECORD_TYPES)
     # A row that went through publication -- live, or a backtest row graded at its early line --
     # is identified by carrying a publication status, not by its record type.
     publishing = ledger[["spread_publication_status", "total_publication_status"]].notna().any(
@@ -430,7 +434,7 @@ def validate_ledger(ledger):
 
     _validate_utc_timestamps(ledger)
     if ledger.loc[live, "current_kickoff_at"].isna().any():
-        raise ValueError("live rows require a current kickoff")
+        raise ValueError("live and reconstructed rows require a current kickoff")
     if ledger["void_reason"].dropna().map(lambda value: not _is_nonblank_string(value)).any():
         raise ValueError("void reason must be null or a nonblank string")
 

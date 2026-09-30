@@ -179,7 +179,7 @@ def test_load_app_wraps_tracker_parquet_read_failure(tmp_path, monkeypatch):
     tracker.write_bytes(b"not parquet")
     schedule = write_schedule_artifact(tmp_path)
 
-    def fail(path):
+    def fail(path, reconstructed_path=None):
         raise ValueError("invalid tracker parquet footer")
 
     monkeypatch.setattr("nfl_game.web.runtime.TrackerService.from_parquet", fail)

@@ -31,7 +31,9 @@ def services():
     features = pd.read_parquet(PROCESSED_DIR / "game_features.parquet")
     trimmed = features[features["season"].isin(SEASONS)].reset_index(drop=True)
     slate = SlateService(trimmed)
-    tracker = TrackerService.from_parquet(PROCESSED_DIR / "tracker_ledger.parquet")
+    tracker = TrackerService.from_parquet(
+        PROCESSED_DIR / "tracker_ledger.parquet", PROCESSED_DIR / "tracker_reconstructed.parquet"
+    )
     return slate, tracker
 
 

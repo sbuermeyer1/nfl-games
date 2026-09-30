@@ -13,6 +13,10 @@ from nfl_game.tracking.summary import (
     summarize_selection,
 )
 
+#: What the official ledger may contain. Reconstructed records come from their own artifact
+#: (scripts/reconstruct_outage_2026.py) and are never mixed into it.
+OFFICIAL_RECORD_TYPES = frozenset({"backtest", "live"})
+
 
 class TrackerInputError(ValueError):
     """A tracker record type or season selection is invalid."""
@@ -21,20 +25,35 @@ class TrackerInputError(ValueError):
 class TrackerService:
     """Validate and expose the packaged tracker ledger without mutating it."""
 
-    def __init__(self, ledger: pd.DataFrame):
+    def __init__(self, ledger: pd.DataFrame, reconstructed: pd.DataFrame | None = None):
         validate_ledger(ledger)
-        self._ledger = ledger.copy()
+        if not ledger["record_type"].isin(OFFICIAL_RECORD_TYPES).all():
+            raise ValueError("the official ledger may hold only backtest and live records")
+        frames = [ledger]
+        if reconstructed is not None:
+            validate_ledger(reconstructed)
+            if not reconstructed["record_type"].eq("reconstructed").all():
+                raise ValueError("the reconstructed artifact may hold only reconstructed records")
+            frames.append(reconstructed)
+        self._ledger = pd.concat(frames, ignore_index=True) if len(frames) > 1 else ledger.copy()
+        self._has_reconstructed = reconstructed is not None
         versions = sorted(self._ledger["model_version"].unique())
         if versions != [HISTORICAL_MODEL_VERSION]:
             raise ValueError(f"official tracker requires only {HISTORICAL_MODEL_VERSION!r}")
 
     @classmethod
-    def from_parquet(cls, path: str | Path) -> "TrackerService":
-        return cls(pd.read_parquet(path))
+    def from_parquet(
+        cls, path: str | Path, reconstructed_path: str | Path | None = None
+    ) -> "TrackerService":
+        reconstructed = None if reconstructed_path is None else pd.read_parquet(reconstructed_path)
+        return cls(pd.read_parquet(path), reconstructed)
 
     def options(self) -> dict:
-        return {
-            "record_types": ["backtest", "live"],
+        record_types = ["backtest", "live"]
+        if self._has_reconstructed:
+            record_types.append("reconstructed")
+        options = {
+            "record_types": record_types,
             "seasons": {
                 record_type: sorted(
                     int(value)
@@ -42,7 +61,7 @@ class TrackerService:
                         self._ledger["record_type"].eq(record_type), "season"
                     ].unique()
                 )
-                for record_type in ("backtest", "live")
+                for record_type in record_types
             },
             "default_record_type": "backtest",
             "default_season": "all",
@@ -51,6 +70,9 @@ class TrackerService:
             "spread_edge_thresholds": list(SPREAD_EDGE_THRESHOLDS),
             "live_available": bool(self._ledger["record_type"].eq("live").any()),
         }
+        if self._has_reconstructed:
+            options["reconstructed_available"] = True
+        return options
 
     def _season(self, record_type: str, season: str | int) -> str | int:
         if record_type not in RECORD_TYPES:

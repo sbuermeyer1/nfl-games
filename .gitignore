@@ -27,6 +27,9 @@ data/raw/line_history/*
 !data/processed/tracker_ledger.parquet
 !data/processed/schedule_2026.parquet
 !data/processed/starter_advisory.parquet
+# The 2026 week 2-3 records rebuilt after the Sept 16-29 outage (scripts/reconstruct_outage_2026.py).
+!data/processed/tracker_reconstructed.parquet
+!data/processed/tracker_reconstructed_manifest.json
 
 # Ridge-v2 research track: the manifest is the committed provenance record. Its feature
 # parquet is deliberately NOT negated -- it is 7.3 MB against v1's 251 KB and would be

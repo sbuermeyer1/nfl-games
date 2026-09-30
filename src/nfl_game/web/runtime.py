@@ -78,6 +78,9 @@ def resolve_runtime(no_auth: bool, environ: Mapping[str, str]) -> RuntimeConfig:
 #: -- `scripts/slate.py` is unaffected and keeps the live provider: a one-shot CLI on a
 #: real machine has the memory for it.
 STARTER_ADVISORY_PATH = PROCESSED_DIR / "starter_advisory.parquet"
+#: Optional: weeks 2-3 of 2026 rebuilt after the Sept 16-29 outage
+#: (scripts/reconstruct_outage_2026.py). Shown in its own tracker tab when present.
+RECONSTRUCTED_TRACKER_PATH = PROCESSED_DIR / "tracker_reconstructed.parquet"
 
 
 def _build_starter_provider() -> PackagedStarterProvider | None:
@@ -109,6 +112,7 @@ def load_services(
     dataset_path: str | Path,
     tracker_path: str | Path,
     schedule_path: str | Path,
+    reconstructed_path: str | Path | None = RECONSTRUCTED_TRACKER_PATH,
 ) -> tuple[SlateService, TrackerService]:
     """Build the slate and tracker services exactly as the served dashboard does.
 
@@ -141,7 +145,12 @@ def load_services(
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged dataset {dataset}: {exc}") from exc
     try:
-        tracker_service = TrackerService.from_parquet(tracker)
+        reconstructed = (
+            Path(reconstructed_path)
+            if reconstructed_path is not None and Path(reconstructed_path).is_file()
+            else None
+        )
+        tracker_service = TrackerService.from_parquet(tracker, reconstructed)
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged tracker ledger {tracker}: {exc}") from exc
     return slate_service, tracker_service

@@ -42,6 +42,9 @@ TRACKER_PAGE = """<!doctype html>
         Historical backtest
       </button>
       <button id="live-tab" type="button" role="tab" aria-selected="false">Live record</button>
+      <button id="reconstructed-tab" type="button" role="tab" aria-selected="false" hidden>
+        Reconstructed (outage)
+      </button>
     </div>
     <label>Season <select id="tracker-season"></select></label>
   </div>
@@ -73,12 +76,14 @@ TRACKER_PAGE = """<!doctype html>
   </section>
 
   <p class="note">Historical results are walk-forward backtests graded at the line available five days before kickoff, the same lock the live tracker publishes under. The closing-line columns show the same picks settled at the close instead.
-  Live tracking begins in 2026. A 52.4% win rate is the standard -110 break-even reference.
+  Live tracking begins in 2026. 2026 weeks 2-3 were never published because an automation outage (Sept 16-29) blocked every tracker run; the Reconstructed tab replays them from data available at each would-be publication and is kept out of the live record.
+  A 52.4% win rate is the standard -110 break-even reference.
   This is model tracking, not betting advice.</p>
 </main>
 <script>
 const historicalTab = document.getElementById('historical-tab');
 const liveTab = document.getElementById('live-tab');
+const reconstructedTab = document.getElementById('reconstructed-tab');
 const season = document.getElementById('tracker-season');
 const trackerMessage = document.getElementById('tracker-message');
 const qualifiedCards = document.getElementById('qualified-cards');
@@ -218,9 +223,13 @@ function renderSummary(body) {
     trackerMessage.textContent = body.message;
     return;
   }
-  trackerMessage.textContent = activeRecordType === 'backtest'
-    ? 'Walk-forward backtest, graded at the 5-day publication line.'
-    : 'Official record uses frozen published lines.';
+  trackerMessage.textContent = {
+    backtest: 'Walk-forward backtest, graded at the 5-day publication line.',
+    live: 'Official record uses frozen published lines.',
+    reconstructed: 'Reconstructed after the Sept 16-29 outage: each pick replayed at the '
+      + 'tracker run that would have published it, using only data available then. '
+      + 'Not part of the live record.',
+  }[activeRecordType];
   renderRecordCards(qualifiedCards, body.qualified);
   renderRecordCards(allRecords, body.all_predictions);
   renderSpreadEdges(body.spread_edges);
@@ -309,6 +318,7 @@ function selectRecordType(recordType) {
   activeRecordType = recordType;
   historicalTab.setAttribute('aria-selected', recordType === 'backtest' ? 'true' : 'false');
   liveTab.setAttribute('aria-selected', recordType === 'live' ? 'true' : 'false');
+  reconstructedTab.setAttribute('aria-selected', recordType === 'reconstructed' ? 'true' : 'false');
   invalidateTracker();
   if (!trackerOptions) {
     queuedRecordType = recordType;
@@ -348,6 +358,10 @@ async function initialize() {
     replaceSeasonOptions(options);
     historicalTab.setAttribute('aria-selected', activeRecordType === 'backtest' ? 'true' : 'false');
     liveTab.setAttribute('aria-selected', activeRecordType === 'live' ? 'true' : 'false');
+    reconstructedTab.setAttribute(
+      'aria-selected', activeRecordType === 'reconstructed' ? 'true' : 'false',
+    );
+    reconstructedTab.hidden = !options.reconstructed_available;
     invalidateTracker();
     await loadSelection();
   } catch (error) {
@@ -357,6 +371,7 @@ async function initialize() {
 
 historicalTab.addEventListener('click', () => selectRecordType('backtest'));
 liveTab.addEventListener('click', () => selectRecordType('live'));
+reconstructedTab.addEventListener('click', () => selectRecordType('reconstructed'));
 season.addEventListener('change', () => {
   invalidateTracker();
   return loadSelection();
