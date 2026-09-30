@@ -424,6 +424,25 @@ class SlateService:
             "starters": starter_metadata,
         }
 
+    def payload_and_csv(
+        self,
+        season: int,
+        week: int,
+        estimator: str = "ridge",
+        edge_threshold: float = DEFAULT_EDGE_THRESHOLD,
+    ) -> tuple[dict, str]:
+        """`payload` and `csv` from ONE slate computation, so a static export cannot
+        pair a JSON payload with a CSV built from a different market snapshot."""
+        slate, metadata, starter_metadata = self._slate_result(
+            season, week, estimator, edge_threshold
+        )
+        payload = {
+            "games": self._json_records(slate),
+            "market": metadata,
+            "starters": starter_metadata,
+        }
+        return payload, slate.to_csv(index=False, na_rep="")
+
     def records(self, *args, **kwargs) -> list[dict]:
         slate, _, _ = self._slate_result(*args, **kwargs)
         return self._json_records(slate)

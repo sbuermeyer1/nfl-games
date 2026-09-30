@@ -101,6 +101,19 @@ def load_app(
     schedule_path: str | Path,
 ):
     """Load all packaged artifacts through their read-only web services."""
+    slate_service, tracker_service = load_services(dataset_path, tracker_path, schedule_path)
+    return create_app(slate_service, tracker_service, access_code=config.access_code)
+
+
+def load_services(
+    dataset_path: str | Path,
+    tracker_path: str | Path,
+    schedule_path: str | Path,
+) -> tuple[SlateService, TrackerService]:
+    """Build the slate and tracker services exactly as the served dashboard does.
+
+    Shared with the static-site export, so both publish the same numbers.
+    """
     dataset = Path(dataset_path)
     tracker = Path(tracker_path)
     schedule = Path(schedule_path)
@@ -131,4 +144,4 @@ def load_app(
         tracker_service = TrackerService.from_parquet(tracker)
     except Exception as exc:
         raise RuntimeConfigError(f"cannot load packaged tracker ledger {tracker}: {exc}") from exc
-    return create_app(slate_service, tracker_service, access_code=config.access_code)
+    return slate_service, tracker_service

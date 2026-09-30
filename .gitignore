@@ -38,3 +38,7 @@ data/raw/line_history/*
 !data/processed/ridge_v2_evaluation.json
 !data/processed/ridge_v2_ablation.parquet
 !data/processed/ridge_v2_calibration.json
+
+# Static-site export (scripts/export_static_site.py); regenerated on every deploy.
+site/
+.firebase/
