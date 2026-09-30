@@ -61,5 +61,23 @@ jobs:
           key="$RUNNER_TEMP/firebase-deployer.json"
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$key"
           trap 'rm -f "$key"' EXIT
+          # firebase-tools reports ANY unusable key as "Failed to authenticate, have you
+          # run firebase login?", which hides whether the secret is truncated, wrapped in
+          # extra text, or for the wrong project. Check its shape first and print only
+          # non-secret identity fields -- never private_key.
+          python - "$key" <<'PY'
+          import json, sys
+          try:
+              with open(sys.argv[1], encoding="utf-8") as handle:
+                  info = json.load(handle)
+          except ValueError as exc:
+              sys.exit(f"::error::FIREBASE_SERVICE_ACCOUNT is not valid JSON ({exc.__class__.__name__}); re-paste the whole key file")
+          print("key type:", info.get("type"), "| account:", info.get("client_email"), "| project:", info.get("project_id"))
+          missing = [f for f in ("type", "client_email", "private_key", "project_id") if not info.get(f)]
+          if missing or info.get("type") != "service_account":
+              sys.exit(f"::error::FIREBASE_SERVICE_ACCOUNT is not a service-account key (missing: {missing})")
+          if info["project_id"] != "ashburn-nfl-games":
+              sys.exit(f"::error::key belongs to project {info['project_id']!r}, not ashburn-nfl-games")
+          PY
           GOOGLE_APPLICATION_CREDENTIALS="$key" npx --yes firebase-tools@15.32.0 \
             deploy --only hosting --project ashburn-nfl-games --non-interactive
