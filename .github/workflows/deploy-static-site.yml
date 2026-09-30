@@ -72,7 +72,7 @@ jobs:
                   info = json.load(handle)
           except ValueError as exc:
               sys.exit(f"::error::FIREBASE_SERVICE_ACCOUNT is not valid JSON ({exc.__class__.__name__}); re-paste the whole key file")
-          print("key type:", info.get("type"), "| account:", info.get("client_email"), "| project:", info.get("project_id"))
+          print("key type:", info.get("type"), "| key id:", str(info.get("private_key_id"))[:12], "| account:", info.get("client_email"), "| project:", info.get("project_id"))
           missing = [f for f in ("type", "client_email", "private_key", "project_id") if not info.get(f)]
           if missing or info.get("type") != "service_account":
               sys.exit(f"::error::FIREBASE_SERVICE_ACCOUNT is not a service-account key (missing: {missing})")
