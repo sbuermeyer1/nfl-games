@@ -20,9 +20,9 @@ from nfl_game.web.static_export import SHIM_TAG, export_site, with_shim
 from nfl_game.web.static_shim import STATIC_SHIM
 from nfl_game.web.tracker_service import TrackerService
 
-# Real packaged data, trimmed so the fits stay fast. 2022 has no prior season inside
+# Real packaged data, trimmed so the fits stay fast. 2021 has no prior season inside
 # the trim, so its slates exercise the exported 409 path.
-SEASONS = (2022, 2023)
+SEASONS = (2021, 2022, 2023)
 THRESHOLDS = (0, 0.5, 1.5, 2, 3.5, 100)
 
 
