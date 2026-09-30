@@ -1,0 +1,65 @@
+# Rebuilds the static dashboard and publishes it to Firebase Hosting
+# (project `ashburn-nfl-games`, https://ashburn-nfl-games.web.app).
+#
+# WHY THREE TRIGGERS: the static site is only as fresh as its last deploy
+# (src/nfl_game/web/static_export.py). New predictions and tracker grades arrive as
+# commits from the two data-writer workflows, so a successful run of either redeploys.
+# Market lines, though, move between those commits and the served app used to fetch them
+# per request, so an hourly run in season republishes the lines too. GitHub delays and
+# drops scheduled runs under load (the 15-minute tracker schedule has been observed
+# running every 3-5 hours), so "hourly" is a ceiling, not a promise.
+#
+# Deploys always build from the CURRENT master tip, never the triggering run's commit:
+# the data writers commit after they are checked out, so their own head_sha is stale.
+
+name: Deploy static site
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Refresh 2026 model data", "Update 2026 tracker data"]
+    types: [completed]
+  schedule:
+    - cron: "5 * * 8-12,1-2 *"
+
+# Reads the repo; writes nothing to it. The Firebase key is the only credential.
+permissions:
+  contents: read
+
+# A newer deploy supersedes an older one -- only the latest data matters.
+concurrency:
+  group: firebase-static-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      # Only the export's own parity tests: the data writers already ran the full
+      # suite on the data this deploys, and a deploy should not wait ~4 minutes on it.
+      - run: python -m pytest -q tests/test_static_export.py
+      - run: python scripts/export_static_site.py
+      - name: Deploy to Firebase Hosting
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::repository secret FIREBASE_SERVICE_ACCOUNT is not set"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/firebase-deployer.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$key"
+          trap 'rm -f "$key"' EXIT
+          GOOGLE_APPLICATION_CREDENTIALS="$key" npx --yes firebase-tools@15.32.0 \
+            deploy --only hosting --project ashburn-nfl-games --non-interactive
