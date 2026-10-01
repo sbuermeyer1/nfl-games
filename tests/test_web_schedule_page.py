@@ -166,7 +166,7 @@ def test_schedule_page_links_all_site_sections():
     home = http_client.get("/").text
     schedule = http_client.get("/schedule").text
 
-    assert '<a href="/schedule">2026 schedule</a>' in home
+    assert '<a href="/schedule">Schedule</a>' in home
     assert '<a href="/">Weekly predictions</a>' in schedule
     assert '<a href="/tracker">Performance tracker</a>' in schedule
     assert "2026 NFL Schedule" in schedule
