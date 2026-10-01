@@ -83,6 +83,11 @@ def test_summary_separates_live_and_backtest_and_counts_pushes():
     assert [row["min_edge"] for row in summary["spread_edges"]] == [5.0, 10.0, 15.0]
     assert [row["record"]["n_graded"] for row in summary["spread_edges"]] == [2, 1, 0]
     assert [row["record"]["pushes"] for row in summary["spread_edges"]] == [1, 1, 1]
+    # Totals: edges +2 (over, 48 > 44 win), -2 (under, 40 win), +1, -5 (44 == line, push).
+    assert [row["min_edge"] for row in summary["total_edges"]] == [2.0, 5.0, 10.0]
+    assert [row["record"]["wins"] for row in summary["total_edges"]] == [2, 0, 0]
+    assert [row["record"]["pushes"] for row in summary["total_edges"]] == [1, 1, 0]
+    assert [row["record"]["n_graded"] for row in summary["total_edges"]] == [2, 0, 0]
     assert {row["season"] for row in summary["by_season"]} == {2024, 2025}
 
 
@@ -113,7 +118,7 @@ def test_excluded_markets_do_not_change_summary_denominators():
     before = summarize_selection(baseline, "live", "all")
     after = summarize_selection(with_excluded, "live", "all")
 
-    for key in ("all_predictions", "qualified", "spread_edges", "closing_line"):
+    for key in ("all_predictions", "qualified", "spread_edges", "total_edges", "closing_line"):
         assert after[key] == before[key]
 
 

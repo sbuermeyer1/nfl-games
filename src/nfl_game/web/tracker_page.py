@@ -94,6 +94,10 @@ TRACKER_PAGE = """<!doctype html>
     <h2 id="edges-heading">Cumulative spread edges</h2>
     <div class="table-wrap"><table id="spread-edges"></table></div>
   </section>
+  <section aria-labelledby="total-edges-heading">
+    <h2 id="total-edges-heading">Cumulative over/under edges</h2>
+    <div class="table-wrap"><table id="total-edges"></table></div>
+  </section>
   <section aria-labelledby="seasons-heading">
     <h2 id="seasons-heading">Season breakdown</h2>
     <div class="table-wrap"><table id="season-breakdown"></table></div>
@@ -121,6 +125,7 @@ const trackerMessage = document.getElementById('tracker-message');
 const qualifiedCards = document.getElementById('qualified-cards');
 const allRecords = document.getElementById('all-records');
 const spreadEdges = document.getElementById('spread-edges');
+const totalEdges = document.getElementById('total-edges');
 const seasonBreakdown = document.getElementById('season-breakdown');
 const auditGames = document.getElementById('audit-games');
 const closingLine = document.getElementById('closing-line');
@@ -144,6 +149,7 @@ function invalidateTracker() {
   qualifiedCards.replaceChildren();
   allRecords.replaceChildren();
   spreadEdges.replaceChildren();
+  totalEdges.replaceChildren();
   seasonBreakdown.replaceChildren();
   auditGames.replaceChildren();
   closingLine.replaceChildren();
@@ -211,9 +217,9 @@ function renderTable(table, columns, rows) {
   }
 }
 
-function renderSpreadEdges(edges) {
+function renderEdges(table, edges) {
   renderTable(
-    spreadEdges,
+    table,
     [
       ['Minimum edge', row => `${formatValue(row.min_edge).replace('.0', '')}+`],
       ['Record', row => recordText(row.record)],
@@ -264,7 +270,8 @@ function renderSummary(body) {
   }[activeRecordType];
   renderRecordCards(qualifiedCards, body.qualified);
   renderRecordCards(allRecords, body.all_predictions);
-  renderSpreadEdges(body.spread_edges);
+  renderEdges(spreadEdges, body.spread_edges);
+  if (body.total_edges) renderEdges(totalEdges, body.total_edges);
   if (season.value === 'all' && body.by_season) {
     renderSeasons(body.by_season);
   }

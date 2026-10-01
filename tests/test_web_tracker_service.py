@@ -82,6 +82,7 @@ def test_options_are_fixed_to_the_official_model_and_thresholds():
         "model_version": "ridge-v1",
         "qualified_edge": 2.0,
         "spread_edge_thresholds": [5.0, 10.0, 15.0],
+        "total_edge_thresholds": [2.0, 5.0, 10.0],
         "live_available": False,
     }
 

@@ -15,6 +15,7 @@ TRACKER_IDS = (
     "qualified-cards",
     "all-records",
     "spread-edges",
+    "total-edges",
     "season-breakdown",
     "audit-games",
     "closing-line",
@@ -50,6 +51,11 @@ def core_summary(label, *, closing_line=None):
             {"min_edge": 5.0, "record": record(offset + 5, 3, 1, (offset + 5) / (offset + 8))},
             {"min_edge": 10.0, "record": record(offset + 2, 2, 0, (offset + 2) / (offset + 4))},
             {"min_edge": 15.0, "record": record(offset + 1, 1, 0, (offset + 1) / (offset + 2))},
+        ],
+        "total_edges": [
+            {"min_edge": 2.0, "record": record(offset + 4, 2, 1, (offset + 4) / (offset + 6))},
+            {"min_edge": 5.0, "record": record(offset + 1, 1, 0, (offset + 1) / (offset + 2))},
+            {"min_edge": 10.0, "record": record(offset, 0, 0, 1.0 if offset else None)},
         ],
         "closing_line": closing_line,
     }
@@ -227,6 +233,7 @@ nodes['reconstructed-tab'].tagName = 'button';
 nodes['tracker-season'].tagName = 'select';
 nodes['tracker-message'].tagName = 'p';
 nodes['spread-edges'].tagName = 'table';
+nodes['total-edges'].tagName = 'table';
 nodes['season-breakdown'].tagName = 'table';
 nodes['audit-games'].tagName = 'table';
 
@@ -366,6 +373,9 @@ def test_overall_historical_renders_records_thresholds_and_seasons():
     assert "6-4-1 · 60.0% · n=10" in state["regions"]["qualified-cards"]
     assert "8-6-1 · 57.1% · n=14" in state["regions"]["all-records"]
     assert all(threshold in state["regions"]["spread-edges"] for threshold in ("5+", "10+", "15+"))
+    total_edges = state["regions"]["total-edges"]
+    assert all(threshold in total_edges for threshold in ("2+", "5+", "10+"))
+    assert "4-2-1 · 66.7% · n=6" in total_edges
     assert "2024" in state["regions"]["season-breakdown"]
     assert "2025" in state["regions"]["season-breakdown"]
     assert not any(url.startswith("/api/tracker/games") for url in state["calls"])
@@ -418,6 +428,7 @@ def test_live_unavailable_shows_only_the_service_message():
         "qualified-cards",
         "all-records",
         "spread-edges",
+        "total-edges",
         "season-breakdown",
         "audit-games",
         "closing-line",

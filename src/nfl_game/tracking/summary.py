@@ -9,6 +9,10 @@ from nfl_game.tracking.ledger import LIFECYCLE_RECORD_TYPES, RECORD_TYPES
 
 QUALIFIED_EDGE = 2.0
 SPREAD_EDGE_THRESHOLDS = (5.0, 10.0, 15.0)
+#: Over/under cohorts, smaller than the spread ones because total gaps run smaller: 2+ is the
+#: qualified-pick cutoff, 5+ the pre-registered totals threshold. Display only -- nothing is
+#: selected or tested on these cohorts.
+TOTAL_EDGE_THRESHOLDS = (2.0, 5.0, 10.0)
 LIVE_UNAVAILABLE_MESSAGE = "Live tracking begins with the 2026 season."
 
 _AUDIT_COLUMNS = [
@@ -98,6 +102,15 @@ def _core_summary(selected: pd.DataFrame) -> dict:
                 ),
             }
             for threshold in SPREAD_EDGE_THRESHOLDS
+        ],
+        "total_edges": [
+            {
+                "min_edge": threshold,
+                "record": record_summary(
+                    selected.loc[selected["total_edge"].abs() >= threshold, "total_grade"]
+                ),
+            }
+            for threshold in TOTAL_EDGE_THRESHOLDS
         ],
     }
     if selected["record_type"].isin(LIFECYCLE_RECORD_TYPES).all():

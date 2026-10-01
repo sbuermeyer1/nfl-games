@@ -9,6 +9,7 @@ from nfl_game.tracking.ledger import HISTORICAL_MODEL_VERSION, RECORD_TYPES, val
 from nfl_game.tracking.summary import (
     QUALIFIED_EDGE,
     SPREAD_EDGE_THRESHOLDS,
+    TOTAL_EDGE_THRESHOLDS,
     audit_rows,
     summarize_selection,
 )
@@ -68,6 +69,7 @@ class TrackerService:
             "model_version": HISTORICAL_MODEL_VERSION,
             "qualified_edge": QUALIFIED_EDGE,
             "spread_edge_thresholds": list(SPREAD_EDGE_THRESHOLDS),
+            "total_edge_thresholds": list(TOTAL_EDGE_THRESHOLDS),
             "live_available": bool(self._ledger["record_type"].eq("live").any()),
         }
         if self._has_reconstructed:
