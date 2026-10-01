@@ -32,6 +32,9 @@ PAGE = """<!doctype html>
   :root { --ink: #111111; --muted: #555555; --rule: #e4e4e4; --accent: #c4142f; --qb: #8a4b00; }
   body { margin: 0; background: #ffffff; color: var(--ink); font-family: 'Space Grotesk', system-ui, sans-serif; }
   main { max-width: 76rem; margin: auto; padding: 1.5rem 1rem 4rem; display: grid; gap: 2rem; }
+  /* Grid items default to min-width:auto, so the wide table would stretch the whole page
+     sideways on a phone instead of scrolling inside .table-wrap. */
+  main > * { min-width: 0; }
   a { color: var(--ink); }
   a:hover { color: var(--accent); }
   .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
@@ -71,7 +74,7 @@ PAGE = """<!doctype html>
   td { padding: .875rem .5rem; border-bottom: 1px solid var(--rule); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .9375rem; }
   td:first-child { font-family: 'Space Grotesk', system-ui, sans-serif; font-size: 1.0625rem; }
   tr.edge td:first-child, tr.edge td:nth-child(3) { font-weight: 700; }
-  td.lean { padding-left: calc(.5rem + 128px); color: var(--muted); background: linear-gradient(#cfcfcf, #cfcfcf) no-repeat .5rem 50% / var(--bar, 0px) 12px; }
+  td.lean { padding-left: calc(.5rem + 136px); color: var(--muted); background: linear-gradient(#cfcfcf, #cfcfcf) no-repeat .5rem 50% / var(--bar, 0px) 12px; }
   td.lean.hot { color: var(--accent); font-weight: 700; background-image: linear-gradient(var(--accent), var(--accent)); }
   tr.qb-watch td:last-child { color: var(--qb); font-weight: 700; }
   .note { margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.5; }
