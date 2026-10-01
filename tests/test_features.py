@@ -280,3 +280,92 @@ def test_future_2026_games_with_lines_keep_finite_features_and_null_targets():
     assert pd.isna(out.loc["2026_01_KC_BUF", "margin"])
     assert pd.isna(out.loc["2026_01_KC_BUF", "total_points"])
     assert np.isfinite(out.loc["2026_01_KC_BUF", FEATURE_COLS]).all()
+
+
+def test_an_unplayed_week_gets_trailing_ngs_from_earlier_weeks():
+    """The live case: the target week has no NGS rows of its own yet.
+
+    Every live prediction is for a week not yet played, so its NGS rows do not exist. The
+    trailing mean used to be computed only at weeks that HAD rows, so these games silently
+    fell back to zero diffs flagged as imputed -- unlike ~94% of the training rows. The
+    fixture used to include week-2 NGS for week-2 games, which is why nothing caught it.
+    """
+    played = build_game_features(_schedules(), _ratings(), _ngs()).set_index("game_id")
+    unplayed_ngs = _ngs().loc[lambda frame: frame["week"].eq(1)]
+    unplayed = build_game_features(_schedules(), _ratings(), unplayed_ngs).set_index("game_id")
+
+    cols = ["cpoe_diff", "ryoe_diff", "separation_diff", "ngs_imputed_any"]
+    pd.testing.assert_frame_equal(unplayed[cols], played[cols])
+    assert unplayed.loc["2024_02_KC_BUF", "cpoe_diff"] == pytest.approx(2.0)
+    assert unplayed.loc["2024_02_KC_BUF", "ngs_imputed_any"] == 0
+
+
+def _varied_ngs():
+    """Four weeks with values that change week to week, so decay weighting is visible."""
+    rows = []
+    for week in (1, 2, 3, 4):
+        for team, base in (("BUF", 4.0), ("KC", 2.0)):
+            row = _ngs().iloc[0].to_dict()
+            row.update(
+                {
+                    "week": week,
+                    "team": team,
+                    "cpoe": base + week,
+                    "ryoe_per_att": base / 10 - week / 20,
+                    "separation": 2.5 + week / 10,
+                    "cpoe_imputed": int(team == "KC" and week == 2),
+                }
+            )
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_trailing_at_target_keys_matches_the_row_based_trailing():
+    """Where a week HAS its own rows, the new target-keyed path must not move a value."""
+    from nfl_game.model.features import _trailing_ngs
+
+    ngs = _varied_ngs()
+    by_rows = _trailing_ngs(ngs, 4.0).sort_values(["season", "team", "week"])
+    targets = by_rows[["season", "week", "team"]]
+    by_keys = _trailing_ngs(ngs, 4.0, targets).sort_values(["season", "team", "week"])
+    pd.testing.assert_frame_equal(
+        by_keys.reset_index(drop=True),
+        by_rows.reset_index(drop=True)[by_keys.columns],
+        check_dtype=False,
+    )
+    # Week 4 for KC trails weeks 1-3 with decay weights 0.5 ** (age / 4).
+    kc4 = by_keys.loc[by_keys["team"].eq("KC") & by_keys["week"].eq(4)].iloc[0]
+    ages = np.array([3, 2, 1])
+    expected = np.average(np.array([3.0, 4.0, 5.0]), weights=0.5 ** (ages / 4.0))
+    assert kc4["trail_cpoe"] == pytest.approx(expected)
+    assert kc4["trail_imputed_any"] == 1  # KC's week-2 CPOE was imputed
+
+
+def test_trailing_at_a_future_week_uses_only_earlier_weeks():
+    """A target past the last NGS week trails all of them; nothing at or after it counts."""
+    from nfl_game.model.features import _trailing_ngs
+
+    ngs = _varied_ngs()
+    targets = pd.DataFrame({"season": [2024], "week": [6], "team": ["BUF"]})
+    row = _trailing_ngs(ngs, 4.0, targets).iloc[0]
+    ages = np.array([5, 4, 3, 2])
+    expected = np.average(np.array([5.0, 6.0, 7.0, 8.0]), weights=0.5 ** (ages / 4.0))
+    assert row["trail_cpoe"] == pytest.approx(expected)
+    assert row["trail_imputed_any"] == 0
+
+    poisoned = ngs.copy()
+    poisoned.loc[poisoned["week"].ge(3), "cpoe"] = 99.0
+    early = pd.DataFrame({"season": [2024], "week": [3], "team": ["BUF"]})
+    clean = _trailing_ngs(ngs, 4.0, early).iloc[0]["trail_cpoe"]
+    assert _trailing_ngs(poisoned, 4.0, early).iloc[0]["trail_cpoe"] == clean
+
+
+def test_a_team_with_no_earlier_ngs_is_zero_filled_and_flagged():
+    """No prior weeks, or a team absent from NGS, keeps the old imputed fallback."""
+    from nfl_game.model.features import _trailing_ngs
+
+    targets = pd.DataFrame({"season": [2024, 2024], "week": [1, 3], "team": ["BUF", "NOPE"]})
+    out = _trailing_ngs(_varied_ngs(), 4.0, targets).set_index("team")
+    for team in ("BUF", "NOPE"):
+        assert out.loc[team, "trail_cpoe"] == 0.0
+        assert out.loc[team, "trail_imputed_any"] == 1

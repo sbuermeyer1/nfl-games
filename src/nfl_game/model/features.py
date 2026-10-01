@@ -47,8 +47,22 @@ class MissingRatingJoinError(ValueError):
     """A game lost its rating features to a failed join rather than to missing data."""
 
 
-def _trailing_ngs(ngs: pd.DataFrame, halflife: float) -> pd.DataFrame:
-    """Decay-weighted mean of each team's NGS over weeks strictly before each week."""
+def _trailing_ngs(
+    ngs: pd.DataFrame, halflife: float, targets: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Decay-weighted mean of each team's NGS over weeks strictly before each week.
+
+    Without `targets`, one row per team-week PRESENT in `ngs`. That silently skipped every
+    week a team has no NGS row of its own -- which includes every UNPLAYED week, so a live
+    prediction never found its trailing NGS and fell back to zeros with the imputed flag,
+    while ~94% of the 2021-2025 training rows carried real values. With `targets` (season,
+    week, team keys -- the games being built), each key gets the trailing mean of that team's
+    NGS weeks strictly before it, whether or not the key's own week has NGS data. For a week
+    that does have its own row the result is identical, because "rows before it in sorted
+    order" and "weeks before it" are the same set.
+    """
+    if targets is not None:
+        return _trailing_ngs_at(ngs, halflife, targets)
     if ngs.empty:
         columns = {
             "season": pd.Series(dtype=ngs["season"].dtype),
@@ -81,6 +95,35 @@ def _trailing_ngs(ngs: pd.DataFrame, halflife: float) -> pd.DataFrame:
     out = pd.DataFrame(frames)
     for m in NGS_METRICS:
         out[f"trail_{m}"] = out[f"trail_{m}"].fillna(0.0)
+    return out
+
+
+def _trailing_ngs_at(ngs: pd.DataFrame, halflife: float, targets: pd.DataFrame) -> pd.DataFrame:
+    """`_trailing_ngs` evaluated at explicit (season, week, team) keys; see its docstring."""
+    keys = targets[["season", "week", "team"]].drop_duplicates()
+    flags = [f"{m}_imputed" for m in NGS_METRICS if f"{m}_imputed" in ngs.columns]
+    by_team = {key: g.sort_values("week") for key, g in ngs.groupby(["season", "team"])}
+    rows = []
+    for season, week, team in keys.itertuples(index=False):
+        row = {"season": season, "team": team, "week": week}
+        history = by_team.get((season, team))
+        prior = None if history is None else history.loc[history["week"] < week]
+        if prior is None or prior.empty:
+            for m in NGS_METRICS:
+                row[f"trail_{m}"] = np.nan
+            row["trail_imputed_any"] = 1
+        else:
+            age = week - prior["week"].to_numpy()
+            w = 0.5 ** (age / halflife)
+            for m in NGS_METRICS:
+                row[f"trail_{m}"] = float(np.average(prior[m].to_numpy(), weights=w))
+            row["trail_imputed_any"] = int(prior[flags].to_numpy().max()) if flags else 0
+        rows.append(row)
+    columns = ["season", "team", "week", *(f"trail_{m}" for m in NGS_METRICS), "trail_imputed_any"]
+    out = pd.DataFrame(rows, columns=columns)
+    for m in NGS_METRICS:
+        out[f"trail_{m}"] = out[f"trail_{m}"].fillna(0.0)
+    out["trail_imputed_any"] = out["trail_imputed_any"].astype("int64")
     return out
 
 
@@ -123,7 +166,14 @@ def build_game_features(
     """One row per regular-season game with model features and targets."""
     g = schedules[schedules["game_type"] == "REG"].copy()
 
-    trail = _trailing_ngs(ngs, ngs_halflife)
+    targets = pd.concat(
+        [
+            g[["season", "week", side]].rename(columns={side: "team"})
+            for side in ("home_team", "away_team")
+        ],
+        ignore_index=True,
+    )
+    trail = _trailing_ngs(ngs, ngs_halflife, targets)
 
     for side, team_col in (("home", "home_team"), ("away", "away_team")):
         r = ratings.rename(columns={"team": team_col})

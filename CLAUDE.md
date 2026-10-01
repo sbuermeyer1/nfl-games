@@ -510,6 +510,16 @@ Two things guard it now, and they are deliberately different:
   average, so it is zero-filled and `ngs_imputed_any` is set to 1 — the model can see that
   the value is imputed. All 159 all-zero-NGS rows in the current dataset are week 1 and all
   159 carry the flag.
+- **Live rows had the same failure, through a different door (fixed 2026-10-01).** The
+  trailing NGS mean used to be computed only at weeks a team HAS NGS rows for, and an
+  unplayed week never does -- so every live 2026 row (weeks 1-5) ran on zero diffs flagged
+  imputed, while ~94% of 2021-2025 training rows carried real values. `build_game_features`
+  now evaluates the trailing mean at each game's own (season, week, team) key from strictly
+  earlier weeks. Rebuilding all 2,639 historical games with old and new code gives identical
+  NGS features (0 rows differ), so the frozen corpus, the model and the acceptance baseline
+  are unchanged; only live inputs move (measured on weeks 4-5: spread predictions by 1.0 pt
+  on average, max 3.2; totals by 0.65, max 1.9). Live records published before the fix keep
+  the inputs they were published with -- see the amendment in `scripts/evaluate_prereg.py`.
 - **Rating features** carry no such flag, so a missed join there would be invisible.
   `_check_rating_joins` raises `MissingRatingJoinError` before the fill if a game has null
   rating features *in a week where other teams were rated*. That condition is what makes it

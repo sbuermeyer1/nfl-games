@@ -16,6 +16,16 @@ settled" -- true on any quiet day between weeks. Run in week 1 it reported `comp
 the season. The registration itself is untouched (its digest still pins the 2026-08-31 payload);
 this is machinery, and the new condition is outcome-independent and strictly more conservative
 than the one it replaces.
+
+AMENDED 2026-10-01 -- a deviation in the MODEL INPUTS, not in this machinery. The registration
+tests "the model's totals predictions" at the edges its historical estimate was measured on,
+and that estimate came from rows carrying real trailing NGS features. Live rows never did: a
+feature-pipeline bug zero-filled NGS for every unplayed week (see CLAUDE.md, "Failed joins vs.
+missing data"), so every live record published through 2026-10-01 -- weeks 1 and 4 -- was
+predicted with NGS absent. The fix leaves the trained model and every historical row
+unchanged and applies to records published after it. Published records are frozen and keep
+the inputs they were published with, so the 2026 qualifying set mixes both regimes; read the
+endpoint with that split in mind. The registration's payload and digest are untouched.
 """
 
 from __future__ import annotations
