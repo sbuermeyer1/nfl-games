@@ -2,40 +2,72 @@
 
 TRACKER_PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NFL Performance Tracker</title>
+<title>Track record | NFL Performance Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: light; }
+  :root { color-scheme: light; --ink: #111111; --muted: #555555; --rule: #e4e4e4; --accent: #c4142f; }
   * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; margin: 1rem; color: #191919; background: #fafafa; }
-  main { max-width: 72rem; margin: auto; }
-  a { color: #075f3b; }
-  .controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
-  .tabs { display: flex; gap: .4rem; }
-  button, select { font: inherit; padding: .5rem .7rem; }
-  button { cursor: pointer; border: 1px solid #aaa; border-radius: .35rem; background: white; }
-  button[aria-selected="true"] { color: white; background: #075f3b; border-color: #075f3b; }
-  label { display: grid; gap: .25rem; font-weight: 600; }
-  #tracker-message { min-height: 1.4rem; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
-  .card { padding: .9rem; border: 1px solid #ddd; border-radius: .5rem; background: white; }
-  .card h3 { margin: 0 0 .35rem; font-size: 1rem; }
-  .record { margin: 0; font-variant-numeric: tabular-nums; }
-  section { margin-top: 1.5rem; }
-  .table-wrap { overflow-x: auto; background: white; }
+  body { margin: 0; background: #ffffff; color: var(--ink); font-family: 'Space Grotesk', system-ui, sans-serif; }
+  main { max-width: 76rem; margin: auto; padding: 1.5rem 1rem 4rem; display: grid; gap: 1.75rem; }
+  main > * { min-width: 0; }
+  a { color: var(--ink); }
+  a:hover { color: var(--accent); }
+  .masthead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; border-bottom: 3px solid var(--ink); padding-bottom: 1rem; }
+  .brand { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.01em; }
+  .masthead nav { display: flex; flex-wrap: wrap; gap: 1.5rem; font-weight: 500; }
+  .masthead nav a { text-decoration: none; }
+  .masthead nav a[aria-current="page"] { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; text-decoration-color: var(--accent); }
+  .kicker { margin: 0 0 .5rem; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .875rem; letter-spacing: .06em; color: var(--accent); }
+  h1 { margin: 0; font-size: clamp(2.5rem, 6vw, 4rem); line-height: 1; letter-spacing: -0.03em; }
+  .lede { margin: .75rem 0 0; font-size: 1.0625rem; line-height: 1.45; max-width: 48rem; }
+  h2 { margin: 0 0 .75rem; font-size: 1.375rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0; border: 2px solid var(--ink); }
+  button, select { font: inherit; font-size: .9375rem; min-height: 2.75rem; border-radius: 0; color: var(--ink); background: #ffffff; }
+  button { cursor: pointer; border: 0; border-right: 2px solid var(--ink); padding: 0 1rem; font-weight: 700; }
+  .tabs button:last-of-type, .tabs button:has(+ button[hidden]) { border-right: 0; }
+  button[aria-selected="true"] { color: #ffffff; background: var(--ink); }
+  select { border: 2px solid var(--ink); padding: 0 .625rem; }
+  label { display: grid; gap: .25rem; font-size: .8125rem; font-weight: 500; }
+  #tracker-message { margin: 0; min-height: 1.2rem; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .875rem; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); border: 2px solid var(--ink); }
+  .cards:empty { display: none; }
+  .card { padding: 1.25rem 1.5rem; border-right: 2px solid var(--ink); }
+  .card:last-child { border-right: 0; }
+  .card h3 { margin: 0 0 .5rem; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .8125rem; font-weight: 400; letter-spacing: .06em; color: var(--muted); }
+  .card p { margin: .25rem 0 0; }
+  .record { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; white-space: nowrap; }
-  th, td { border-bottom: 1px solid #ddd; padding: .5rem; text-align: right; }
+  th { text-align: right; padding: .625rem .5rem; border-bottom: 2px solid var(--ink); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .75rem; font-weight: 400; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  td { text-align: right; padding: .75rem .5rem; border-bottom: 1px solid var(--rule); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .9375rem; }
   th:first-child, td:first-child { text-align: left; }
-  .note { color: #555; font-size: .9rem; }
+  td:first-child { font-family: 'Space Grotesk', system-ui, sans-serif; font-weight: 700; }
+  .note { margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.5; }
   @media (max-width: 36rem) {
-    body { margin: .65rem; }
     .controls, .tabs { align-items: stretch; flex-direction: column; }
+    .tabs button { border-right: 0; border-bottom: 2px solid var(--ink); }
+    .tabs button:last-of-type { border-bottom: 0; }
     button, select { width: 100%; }
+    .card { border-right: 0; border-bottom: 2px solid var(--ink); }
+    .card:last-child { border-bottom: 0; }
   }
 </style>
 <main>
-  <nav aria-label="Site navigation"><a href="/">Weekly slate</a></nav>
-  <h1>NFL Performance Tracker</h1>
-  <p>Official Ridge walk-forward model records, kept separate from published live picks.</p>
+  <header class="masthead">
+    <span class="brand">THE EDGE REPORT</span>
+    <nav aria-label="Site navigation">
+      <a href="/">This week</a>
+      <a href="/schedule">Schedule</a>
+      <a href="/tracker" aria-current="page">Track record</a>
+    </nav>
+  </header>
+  <section>
+    <p class="kicker">OFFICIAL RIDGE MODEL &middot; RIDGE-V1</p>
+    <h1>Track record</h1>
+    <p class="lede">How the model's picks have graded: the walk-forward backtest and the live 2026 record, always kept separate.</p>
+  </section>
   <div class="controls">
     <div class="tabs" role="tablist" aria-label="Record type">
       <button id="historical-tab" type="button" role="tab" aria-selected="true">

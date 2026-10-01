@@ -167,8 +167,8 @@ def test_schedule_page_links_all_site_sections():
     schedule = http_client.get("/schedule").text
 
     assert '<a href="/schedule">Schedule</a>' in home
-    assert '<a href="/">Weekly predictions</a>' in schedule
-    assert '<a href="/tracker">Performance tracker</a>' in schedule
+    assert '<a href="/">This week</a>' in schedule
+    assert '<a href="/tracker">Track record</a>' in schedule
     assert "2026 NFL Schedule" in schedule
 
 
@@ -257,3 +257,19 @@ def test_schedule_redirects_to_login_when_the_session_expires():
 
     assert state["location"] == "/login"
     assert state["unhandled"] == []
+
+
+def test_schedule_reads_spreads_from_the_favorite_side():
+    """Catch a home-margin sign shown raw, or the wrong team named as favorite."""
+    games = [
+        schedule_game(0, spread_line=3.5),
+        schedule_game(1, spread_line=-6.0),
+        schedule_game(2, spread_line=0.0),
+    ]
+    state = schedule_state(
+        {"/api/schedule?season=2026": response(body=schedule_body(games=games))},
+        initialize_actions(),
+    )
+
+    assert [row[3] for row in state["rows"][1:]] == ["H000 -3.5", "A001 -6.0", "PK"]
+    assert [row[4] for row in state["rows"][1:]] == ["44.5", "44.5", "44.5"]
