@@ -197,6 +197,7 @@ class Element {
     this.disabled = false;
     this.selected = false;
     this._value = undefined;
+    this.style = { props: {}, setProperty(name, value) { this.props[name] = value; } };
   }
   appendChild(child) { this.children.push(child); return child; }
   replaceChildren(...children) { this.children = children; }
@@ -214,7 +215,7 @@ class Element {
 
 const nodes = Object.fromEntries(
   ['season', 'week', 'estimator', 'edge', 'run', 'download', 'message', 'market-message',
-   'starter-message', 'results']
+   'starter-message', 'results', 'slate-label', 'top-spreads', 'top-totals']
     .map(id => [id, new Element(id === 'edge' ? 'input' : 'select')])
 );
 nodes.run.tagName = 'button';
@@ -282,6 +283,11 @@ eval(input.script);
   const rows = nodes.results.children.map(row => ({
     className: row.className,
     cells: row.children.map(cell => cell.textContent),
+    cellClasses: row.children.map(cell => cell.className),
+    bars: row.children.map(cell => cell.style.props['--bar'] ?? null),
+  }));
+  const callouts = id => nodes[id].children.map(article => ({
+    parts: article.children.map(part => [part.className, part.textContent]),
   }));
   const options = id => nodes[id].children.map(option => ({ value: option.value, selected: option.selected }));
   globalThis.__state = JSON.stringify({
@@ -291,6 +297,9 @@ eval(input.script);
     message: nodes.message.textContent,
     marketMessage: nodes['market-message'].textContent,
     starterMessage: nodes['starter-message'].textContent,
+    slateLabel: nodes['slate-label'].textContent,
+    topSpreads: callouts('top-spreads'),
+    topTotals: callouts('top-totals'),
     rows,
     season: { value: nodes.season.value, options: options('season') },
     week: { value: nodes.week.value, options: options('week') },
@@ -370,23 +379,34 @@ def test_dashboard_initializes_selectors_and_renders_safe_game_values():
     assert state["week"]["value"] == "3"
     assert state["estimator"]["value"] == "ridge"
     assert state["edge"] == "2"
+    assert state["rows"][0]["cells"] == [
+        "Game",
+        "Market",
+        "Model",
+        "Spread lean",
+        "Over/under lean",
+        "QB",
+    ]
     assert state["rows"][1] == {
         "className": "edge",
+        # Home-margin spreads read from the favorite's side; no market total -> no O/U lean.
         "cells": [
             "AAA @ BBB",
-            "+4.0",
-            "+2.5",
-            "+1.5",
-            "55.0%",
-            "46.0",
+            "BBB -2.5",
+            "BBB -4.0",
+            "BBB -2.5 \N{MIDDLE DOT} 1.5 pts",
             "\N{EM DASH}",
-            "\N{EM DASH}",
-            "\N{EM DASH}",
-            "*",
             "n/a",
         ],
+        "cellClasses": ["", "", "", "lean hot", "", ""],
+        # 1.5 of the 5-point full scale of a 120px bar.
+        "bars": [None, None, None, "36px", None, None],
     }
+    # QuickJS has no Intl, so the Eastern-time formatter falls back to the raw stamp.
     assert state["marketMessage"] == "Lines updated 2026-09-01T12:00:00+00:00"
+    assert state["slateLabel"] == "2025 \N{MIDDLE DOT} Week 3 \N{MIDDLE DOT} 1 games"
+    assert len(state["topSpreads"]) == 1
+    assert state["topTotals"] == []
 
 
 def test_dashboard_renders_qb_advisory_cell_and_row_class():
@@ -755,7 +775,7 @@ def test_tracker_routes_forward_exact_selections_and_link_from_slate():
         "/api/tracker/games", params={"record_type": "live", "season": 2026}
     )
 
-    assert '<a href="/tracker">Performance tracker</a>' in slate_page.text
+    assert '<a href="/tracker">Track record</a>' in slate_page.text
     assert tracker_page.status_code == 200
     assert "NFL Performance Tracker" in tracker_page.text
     assert options.json()["model_version"] == "ridge-v1"
@@ -931,3 +951,172 @@ def test_factory_integrates_access_code_middleware_login_and_public_routes():
     assert http_client.post("/login", json={"code": "letmein"}).json() == {"ok": True}
     assert http_client.get("/").status_code == 200
     assert http_client.get("/api/options").status_code == 200
+
+
+def slate_with(games):
+    responses = standard_responses()
+    responses["/api/slate?season=2025&week=3&estimator=ridge&edge_threshold=2"]["body"]["games"] = (
+        games
+    )
+    return responses
+
+
+def test_dashboard_reads_spreads_from_the_favorite_and_leans_the_right_side():
+    """Catch a sign slip that names the wrong favorite or the wrong side of the line."""
+    games = [
+        # Market favors the AWAY team by 3.5; the model likes the home team more (+gap).
+        {
+            **dashboard_game("AWY", "HOM"),
+            "market_spread": -3.5,
+            "model_spread": -0.5,
+            "spread_gap": 3.0,
+            "edge_flag": 1,
+        },
+        # Pick'em market; the model favors the away team (-gap).
+        {
+            **dashboard_game("PKA", "PKH"),
+            "market_spread": 0.0,
+            "model_spread": -2.5,
+            "spread_gap": -2.5,
+            "edge_flag": 1,
+        },
+        # Home favored by 6.5; the model rates the home side lower (-gap) -> the underdog.
+        {
+            **dashboard_game("DOG", "FAV"),
+            "market_spread": 6.5,
+            "model_spread": 5.5,
+            "spread_gap": -1.0,
+            "edge_flag": 0,
+        },
+    ]
+    state = dashboard_state(client(), slate_with(games), initialize_actions())
+
+    rows = state["rows"][1:]
+    assert rows[0]["cells"][1:4] == ["AWY -3.5", "AWY -0.5", "HOM +3.5 \N{MIDDLE DOT} 3.0 pts"]
+    assert rows[1]["cells"][1:4] == ["PK", "PKA -2.5", "PKA PK \N{MIDDLE DOT} 2.5 pts"]
+    assert rows[2]["cells"][1:4] == ["FAV -6.5", "FAV -5.5", "DOG +6.5 \N{MIDDLE DOT} 1.0 pts"]
+    assert [row["cellClasses"][3] for row in rows] == ["lean hot", "lean hot", "lean"]
+
+
+def test_dashboard_marks_total_edges_at_the_edge_setting():
+    """Catch over/under leans that ignore the threshold or pick the wrong side."""
+    games = [
+        {
+            **dashboard_game("OVR", "OVH"),
+            "market_total": 40.0,
+            "model_total": 42.5,
+            "total_gap": 2.5,
+        },
+        {
+            **dashboard_game("UND", "UNH"),
+            "market_total": 48.0,
+            "model_total": 46.5,
+            "total_gap": -1.5,
+        },
+        {
+            **dashboard_game("EXA", "EXH"),
+            "market_total": 44.0,
+            "model_total": 46.0,
+            "total_gap": 2.0,
+        },
+        {
+            **dashboard_game("BIG", "BGH"),
+            "market_total": 38.5,
+            "model_total": 48.5,
+            "total_gap": 10.0,
+        },
+    ]
+    state = dashboard_state(client(), slate_with(games), initialize_actions())
+
+    rows = state["rows"][1:]
+    assert [row["cells"][4] for row in rows] == [
+        "OVER 40.0 \N{MIDDLE DOT} model 42.5",
+        "UNDER 48.0 \N{MIDDLE DOT} model 46.5",
+        "OVER 44.0 \N{MIDDLE DOT} model 46.0",
+        "OVER 38.5 \N{MIDDLE DOT} model 48.5",
+    ]
+    # The default edge setting is 2.0, and a gap exactly at it counts.
+    assert [row["cellClasses"][4] for row in rows] == ["lean hot", "lean", "lean hot", "lean hot"]
+    # Bars cap at the 5-point full scale.
+    assert [row["bars"][4] for row in rows] == ["60px", "36px", "48px", "120px"]
+
+
+def test_dashboard_callouts_rank_the_three_largest_gaps_with_their_story():
+    """Catch callouts that rank by signed gap, show more than three, or mislabel edges."""
+    games = [
+        {
+            **dashboard_game("A1", "H1"),
+            "market_spread": 3.5,
+            "model_spread": 8.4,
+            "spread_gap": 4.9,
+            "edge_flag": 1,
+            "market_total": 43.5,
+            "model_total": 45.8,
+            "total_gap": 2.3,
+            "qb_watch": 1,
+            "home_qb": "Starter",
+            "qb_change_epa_home": -0.12,
+            "away_qb": None,
+            "qb_change_epa_away": 0.0,
+            "qb_inferred": 0,
+        },
+        {
+            **dashboard_game("A2", "H2"),
+            "market_spread": 10.5,
+            "model_spread": 7.8,
+            "spread_gap": -2.7,
+            "edge_flag": 1,
+            "market_total": 38.5,
+            "model_total": 48.4,
+            "total_gap": 9.9,
+        },
+        {
+            **dashboard_game("A3", "H3"),
+            "market_spread": 3.0,
+            "model_spread": 4.6,
+            "spread_gap": 1.6,
+            "edge_flag": 0,
+            "market_total": 51.5,
+            "model_total": 49.3,
+            "total_gap": -2.2,
+        },
+        {
+            **dashboard_game("A4", "H4"),
+            "market_spread": 2.5,
+            "model_spread": 2.6,
+            "spread_gap": 0.1,
+            "edge_flag": 0,
+            "market_total": 48.5,
+            "model_total": 48.4,
+            "total_gap": -0.1,
+        },
+    ]
+    state = dashboard_state(client(), slate_with(games), initialize_actions())
+
+    spreads = [dict(callout["parts"]) for callout in state["topSpreads"]]
+    assert [part["matchup"] for part in spreads] == ["A1 @ H1", "A2 @ H2", "A3 @ H3"]
+    assert [part["rank"] for part in spreads] == [
+        "#1 SPREAD EDGE",
+        "#2 SPREAD EDGE",
+        "#3 SPREAD GAP",
+    ]
+    assert spreads[0]["gap hot"] == "4.9"
+    assert spreads[2]["gap"] == "1.6"
+    assert spreads[0]["story"] == (
+        "Market has H1 -3.5. The model makes it H1 -8.4, so it leans H1 -3.5."
+    )
+    assert spreads[1]["story"] == (
+        "Market has H2 -10.5. The model makes it H2 -7.8, so it leans A2 +10.5."
+    )
+    assert spreads[0]["qb"] == "QB watch: Starter -0.12"
+    assert "qb" not in spreads[1]
+
+    totals = [dict(callout["parts"]) for callout in state["topTotals"]]
+    assert [part["matchup"] for part in totals] == ["A2 @ H2", "A1 @ H1", "A3 @ H3"]
+    assert totals[0]["rank"] == "#1 TOTAL EDGE"
+    assert totals[0]["story"] == (
+        "Market total is 38.5. The model projects 48.4, so it leans the over 38.5."
+    )
+    assert totals[2]["story"] == (
+        "Market total is 51.5. The model projects 49.3, so it leans the under 51.5."
+    )
